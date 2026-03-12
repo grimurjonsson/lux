@@ -1,0 +1,20 @@
+[package]
+name = "ctail"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.102"
+clap = { version = "4.5.60", features = ["derive"] }
+clap_complete = "4.6"
+owo-colors = { version = "4.3.0", features = ["supports-colors"] }
+regex = "1.12.3"
+serde = { version = "1.0.228", features = ["derive"] }
+supports-color = "3.0.2"
+notify = "8.0"
+toml = "1.0.6"
+
+[dev-dependencies]
+assert_cmd = "2.2.0"
+predicates = "3.1.4"
+tempfile = "3.27.0"
