@@ -305,6 +305,7 @@ fn missing_config_file_error() {
 
 #[test]
 fn list_profiles_no_config() {
+    // Even without a config file, built-in profiles are shown
     let tmp = TempDir::new().unwrap();
     ctail()
         .args(["--list-profiles"])
@@ -312,7 +313,8 @@ fn list_profiles_no_config() {
         .env_remove("HOME")
         .assert()
         .success()
-        .stdout(predicate::str::contains("No config file found"));
+        .stdout(predicate::str::contains("markdown"))
+        .stdout(predicate::str::contains("built-in"));
 }
 
 #[test]
@@ -349,7 +351,7 @@ style = "yellow"
 }
 
 #[test]
-fn list_profiles_no_profiles_defined() {
+fn list_profiles_no_user_profiles_shows_builtins() {
     let tmp = TempDir::new().unwrap();
     let config_path = write_config(
         &tmp,
@@ -364,7 +366,8 @@ style = "red"
         .args(["--list-profiles", "--config", config_path.to_str().unwrap()])
         .assert()
         .success()
-        .stdout(predicate::str::contains("No profiles defined"));
+        .stdout(predicate::str::contains("markdown"))
+        .stdout(predicate::str::contains("built-in"));
 }
 
 #[test]
@@ -525,11 +528,10 @@ fn trigger_separator() {
     // First trigger group: ERROR one
     // Separator: --- ctail ---
     // Second trigger group: ERROR two
-    assert_eq!(
-        lines,
-        vec!["ERROR one", "--- ctail ---", "ERROR two"],
-        "Expected separator between groups: {lines:?}"
-    );
+    assert_eq!(lines.len(), 3, "Expected 3 lines: {lines:?}");
+    assert_eq!(lines[0], "ERROR one");
+    assert!(lines[1].contains("--- ctail ---"), "separator should contain label: {:?}", lines[1]);
+    assert_eq!(lines[2], "ERROR two");
 }
 
 // === File following integration tests ===
@@ -1021,4 +1023,94 @@ fn filter_strip_ansi_matching() {
         lines[0].contains("ERROR"),
         "Line should contain ERROR: {lines:?}"
     );
+}
+
+// === Markdown profile and extension auto-selection tests ===
+
+#[test]
+fn markdown_auto_select_colors_headings() {
+    // ctail with a .md file should auto-select markdown profile and apply color
+    let dir = TempDir::new().unwrap();
+    let md_path = dir.path().join("test.md");
+    std::fs::write(&md_path, "# Hello\n\nSome **bold** text\n").unwrap();
+
+    let output = StdCommand::new(ctail_bin())
+        .args(["--color", "always"])
+        .arg(md_path.to_str().unwrap())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("failed to run ctail");
+
+    assert!(output.status.success(), "Expected exit 0, got: {:?}", output.status);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        has_ansi_codes(&stdout),
+        "Expected ANSI codes for markdown headings: {stdout:?}"
+    );
+}
+
+#[test]
+fn markdown_auto_select_shows_full_file() {
+    // ctail with a .md file shows full file (not just last 10 lines)
+    let dir = TempDir::new().unwrap();
+    let md_path = dir.path().join("test.md");
+    let content: String = (1..=25).map(|i| format!("Line {i}\n")).collect();
+    std::fs::write(&md_path, &content).unwrap();
+
+    let output = StdCommand::new(ctail_bin())
+        .args(["--color", "never"])
+        .arg(md_path.to_str().unwrap())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("failed to run ctail");
+
+    assert!(output.status.success(), "Expected exit 0, got: {:?}", output.status);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    // All 25 lines should appear (full file from +1)
+    assert_eq!(lines.len(), 25, "Expected all 25 lines, got {}: {lines:?}", lines.len());
+    assert!(stdout.contains("Line 1"), "Expected Line 1: {stdout:?}");
+    assert!(stdout.contains("Line 25"), "Expected Line 25: {stdout:?}");
+}
+
+#[test]
+fn explicit_profile_overrides_extension_auto_select() {
+    // --profile nonexistent with a .md file should error about missing profile,
+    // proving --profile takes priority over extension auto-selection
+    let dir = TempDir::new().unwrap();
+    let md_path = dir.path().join("test.md");
+    std::fs::write(&md_path, "# Test\n").unwrap();
+
+    let output = StdCommand::new(ctail_bin())
+        .args(["--profile", "nonexistent"])
+        .arg(md_path.to_str().unwrap())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("failed to run ctail");
+
+    assert!(!output.status.success(), "Expected failure exit code");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("nonexistent"),
+        "Expected error about missing profile: {stderr:?}"
+    );
+}
+
+#[test]
+fn list_profiles_shows_markdown_builtin() {
+    let tmp = TempDir::new().unwrap();
+    ctail()
+        .args(["--list-profiles"])
+        .env("XDG_CONFIG_HOME", tmp.path().to_str().unwrap())
+        .env_remove("HOME")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("markdown"))
+        .stdout(predicate::str::contains("built-in"));
 }

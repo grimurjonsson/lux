@@ -123,10 +123,22 @@ impl TriggerFilter {
 
     /// Return the separator string between trigger groups.
     fn separator(&self) -> String {
+        let label = "--- ctail ---";
+        let width = terminal_size::terminal_size()
+            .map(|(w, _)| w.0 as usize)
+            .unwrap_or(80);
+        let pad_total = width.saturating_sub(label.len());
+        let pad_left = pad_total / 2;
+        let pad_right = pad_total - pad_left;
+        let line = format!(
+            "{:pad_left$}{}{:pad_right$}",
+            "", label, "",
+        );
         if self.color_enabled {
-            "\x1b[36m--- ctail ---\x1b[0m".to_string()
+            // Cyan text on dark background (ANSI 236 = #303030)
+            format!("\x1b[36;48;5;236m{line}\x1b[0m")
         } else {
-            "--- ctail ---".to_string()
+            line
         }
     }
 
@@ -406,7 +418,7 @@ mod tests {
         let first = tf.process_line("TRIGGER one", "TRIGGER one".to_string());
         match first {
             OutputDecision::Flush(lines) => {
-                assert!(!lines.contains(&"--- ctail ---".to_string()));
+                assert!(lines.iter().all(|l| !l.contains("--- ctail ---")));
                 assert_eq!(lines, vec!["ctx1", "TRIGGER one"]);
             }
             other => panic!("Expected Flush, got {:?}", other),
@@ -416,8 +428,10 @@ mod tests {
         let second = tf.process_line("TRIGGER two", "TRIGGER two".to_string());
         match second {
             OutputDecision::Flush(lines) => {
-                assert_eq!(lines[0], "--- ctail ---");
-                assert_eq!(lines, vec!["--- ctail ---", "ctx2", "TRIGGER two"]);
+                assert!(lines[0].contains("--- ctail ---"), "separator should contain label");
+                assert_eq!(lines.len(), 3); // separator, ctx2, TRIGGER two
+                assert_eq!(lines[1], "ctx2");
+                assert_eq!(lines[2], "TRIGGER two");
             }
             other => panic!("Expected Flush, got {:?}", other),
         }
@@ -620,12 +634,14 @@ mod tests {
         let second = tf.process_line("TRIGGER two", "TRIGGER two".to_string());
         match second {
             OutputDecision::Flush(lines) => {
+                // Cyan text + dark background, full-width padded
                 assert!(
-                    lines[0].contains("\x1b[36m"),
-                    "Expected cyan ANSI code in separator: {:?}",
+                    lines[0].contains("\x1b[36;48;5;236m"),
+                    "Expected cyan+bg ANSI code in separator: {:?}",
                     lines[0]
                 );
-                assert_eq!(lines[0], "\x1b[36m--- ctail ---\x1b[0m");
+                assert!(lines[0].contains("--- ctail ---"));
+                assert!(lines[0].ends_with("\x1b[0m"));
             }
             other => panic!("Expected Flush, got {:?}", other),
         }

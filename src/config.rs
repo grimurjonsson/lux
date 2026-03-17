@@ -7,7 +7,7 @@ use owo_colors::{OwoColorize, Style, XtermColors};
 use serde::Deserialize;
 
 /// A single rule entry from the TOML config file.
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct RuleConfig {
     pub pattern: String,
     pub style: String,
@@ -19,11 +19,23 @@ fn default_scope() -> String {
     "line".to_string()
 }
 
-/// A named profile containing its own set of rules.
-#[derive(Deserialize, Debug)]
+/// A named profile containing its own set of rules and optional trigger settings.
+#[derive(Deserialize, Debug, Clone)]
 pub struct ProfileConfig {
     #[serde(default)]
     pub rules: Vec<RuleConfig>,
+    /// Trigger patterns — suppress output until a match, then show context window.
+    #[serde(default)]
+    pub trigger: Vec<String>,
+    /// Context before trigger: line count or regex boundary pattern.
+    pub before: Option<String>,
+    /// Context after trigger: line count or regex boundary pattern.
+    pub after: Option<String>,
+    /// Number of initial lines to show (like -n flag).
+    pub lines: Option<String>,
+    /// File extensions that auto-select this profile (e.g., ["md", "markdown"]).
+    #[serde(default)]
+    pub extensions: Vec<String>,
 }
 
 /// Top-level config structure matching the TOML schema.
@@ -77,15 +89,113 @@ pub fn load_config(explicit_path: Option<&Path>) -> Result<Option<(Config, PathB
     Ok(Some((config, path)))
 }
 
+/// Return built-in profiles that ship with ctail.
+///
+/// Currently includes a "markdown" profile for rendering .md files with
+/// syntax highlighting and full-file display.
+pub fn builtin_profiles() -> HashMap<String, ProfileConfig> {
+    let mut profiles = HashMap::new();
+    profiles.insert(
+        "markdown".to_string(),
+        ProfileConfig {
+            rules: vec![
+                RuleConfig { pattern: r"^# .+".to_string(), style: "bold+cyan".to_string(), scope: "line".to_string() },
+                RuleConfig { pattern: r"^## .+".to_string(), style: "bold+green".to_string(), scope: "line".to_string() },
+                RuleConfig { pattern: r"^### .+".to_string(), style: "bold+yellow".to_string(), scope: "line".to_string() },
+                RuleConfig { pattern: r"^####+ .+".to_string(), style: "bold+magenta".to_string(), scope: "line".to_string() },
+                RuleConfig { pattern: r"`[^`]+`".to_string(), style: "cyan".to_string(), scope: "match".to_string() },
+                RuleConfig { pattern: r"^```.*".to_string(), style: "dim".to_string(), scope: "line".to_string() },
+                RuleConfig { pattern: r"\*\*[^*]+\*\*".to_string(), style: "bold".to_string(), scope: "match".to_string() },
+                RuleConfig { pattern: r"\*[^*]+\*".to_string(), style: "italic".to_string(), scope: "match".to_string() },
+                RuleConfig { pattern: r"^\s*[-*+] ".to_string(), style: "blue".to_string(), scope: "match".to_string() },
+                RuleConfig { pattern: r"^\s*\d+\. ".to_string(), style: "blue".to_string(), scope: "match".to_string() },
+                RuleConfig { pattern: r"\[([^\]]+)\]\([^)]+\)".to_string(), style: "underline+blue".to_string(), scope: "match".to_string() },
+                RuleConfig { pattern: r"^>\s".to_string(), style: "dim+italic".to_string(), scope: "line".to_string() },
+                RuleConfig { pattern: r"^---$".to_string(), style: "dim".to_string(), scope: "line".to_string() },
+            ],
+            trigger: vec![],
+            before: None,
+            after: None,
+            lines: Some("+1".to_string()),
+            extensions: vec!["md".to_string(), "markdown".to_string(), "mdx".to_string()],
+        },
+    );
+    profiles.insert(
+        "yaml".to_string(),
+        ProfileConfig {
+            rules: vec![
+                RuleConfig { pattern: r"#.*".to_string(), style: "dim".to_string(), scope: "match".to_string() },
+                RuleConfig { pattern: r"^[\w._-]+:".to_string(), style: "bold+cyan".to_string(), scope: "match".to_string() },
+                RuleConfig { pattern: r"^\s+[\w._-]+:".to_string(), style: "cyan".to_string(), scope: "match".to_string() },
+                RuleConfig { pattern: r"^\s*-\s+[\w._-]+:".to_string(), style: "cyan".to_string(), scope: "match".to_string() },
+                RuleConfig { pattern: r":\s+(true|false|yes|no|on|off)$".to_string(), style: "magenta".to_string(), scope: "match".to_string() },
+                RuleConfig { pattern: r":\s+\d[\d.]*$".to_string(), style: "yellow".to_string(), scope: "match".to_string() },
+                RuleConfig { pattern: r#""[^"]*""#.to_string(), style: "green".to_string(), scope: "match".to_string() },
+                RuleConfig { pattern: r"'[^']*'".to_string(), style: "green".to_string(), scope: "match".to_string() },
+                RuleConfig { pattern: r"^\s*- ".to_string(), style: "blue".to_string(), scope: "line".to_string() },
+                RuleConfig { pattern: r"^---$".to_string(), style: "dim".to_string(), scope: "line".to_string() },
+            ],
+            trigger: vec![],
+            before: None,
+            after: None,
+            lines: Some("+1".to_string()),
+            extensions: vec!["yaml".to_string(), "yml".to_string()],
+        },
+    );
+    profiles.insert(
+        "toml".to_string(),
+        ProfileConfig {
+            rules: vec![
+                RuleConfig { pattern: r"^#.*".to_string(), style: "dim".to_string(), scope: "line".to_string() },
+                // [top] or [[top]] — no dots
+                RuleConfig { pattern: r"^\[{1,2}[^\].]+\]{1,2}$".to_string(), style: "bold+magenta".to_string(), scope: "line".to_string() },
+                // [a.b] or [[a.b]] — one dot
+                RuleConfig { pattern: r"^\[{1,2}[^\].]+\.[^\].]+\]{1,2}$".to_string(), style: "bold+green".to_string(), scope: "line".to_string() },
+                // [a.b.c] or [[a.b.c]] — two+ dots
+                RuleConfig { pattern: r"^\[{1,2}[^\].]+\.[^\].]+\..+\]{1,2}$".to_string(), style: "bold+yellow".to_string(), scope: "line".to_string() },
+                RuleConfig { pattern: r"^[\w._-]+\s*=".to_string(), style: "bold+cyan".to_string(), scope: "match".to_string() },
+                RuleConfig { pattern: r"\b(true|false)\b".to_string(), style: "magenta".to_string(), scope: "match".to_string() },
+                RuleConfig { pattern: r#""[^"]*""#.to_string(), style: "green".to_string(), scope: "match".to_string() },
+                RuleConfig { pattern: r"'[^']*'".to_string(), style: "green".to_string(), scope: "match".to_string() },
+                RuleConfig { pattern: r"\[([^\]]*)\]".to_string(), style: "yellow".to_string(), scope: "match".to_string() },
+            ],
+            trigger: vec![],
+            before: None,
+            after: None,
+            lines: Some("+1".to_string()),
+            extensions: vec!["toml".to_string()],
+        },
+    );
+    profiles
+}
+
+/// Find a profile name that matches the given file extension.
+///
+/// Searches both user-defined and built-in profiles. User profiles take priority.
+pub fn find_profile_by_extension(
+    extension: &str,
+    merged_profiles: &HashMap<String, ProfileConfig>,
+) -> Option<String> {
+    for (name, profile) in merged_profiles {
+        if profile.extensions.iter().any(|ext| ext.eq_ignore_ascii_case(extension)) {
+            return Some(name.clone());
+        }
+    }
+    None
+}
+
 /// Print available profiles from the config file to stdout.
 ///
 /// Loads config from the given explicit path or the default XDG location.
 /// Prints profile names sorted alphabetically with rule counts, then the config path.
 pub fn print_profiles(config_path: Option<&Path>) -> Result<()> {
+    owo_colors::set_override(true);
     let config = load_config(config_path)?;
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
-    print_profiles_to(config_path, config.as_ref().map(|(c, p)| (c, p.clone())), &mut out)
+    let result = print_profiles_to(config_path, config.as_ref().map(|(c, p)| (c, p.clone())), &mut out);
+    owo_colors::set_override(false);
+    result
 }
 
 /// Write profile listing to the given writer (testable version).
@@ -94,28 +204,141 @@ pub fn print_profiles_to(
     config: Option<(&Config, PathBuf)>,
     out: &mut dyn Write,
 ) -> Result<()> {
+    let builtins = builtin_profiles();
+
+    // Collect user-defined profile names for deduplication
+    let user_profile_names: std::collections::HashSet<&String> = config
+        .as_ref()
+        .map(|(cfg, _)| cfg.profiles.keys().collect())
+        .unwrap_or_default();
+
+    // Determine which built-in profiles to show (those not overridden by user)
+    let visible_builtins: Vec<&String> = builtins
+        .keys()
+        .filter(|k| !user_profile_names.contains(k))
+        .collect();
+
     match config {
         None => {
-            writeln!(out, "No config file found.")?;
-            if let Some(default) = default_config_path() {
-                writeln!(out, "Default location: {}", default.display())?;
+            if visible_builtins.is_empty() {
+                writeln!(out, "No config file found.")?;
+                if let Some(default) = default_config_path() {
+                    writeln!(out, "Default location: {}", default.display())?;
+                }
+            } else {
+                // Show built-in profiles even without config
+                writeln!(out, "{}", "Available profiles:".bold())?;
+                writeln!(out)?;
+                let mut names: Vec<&String> = visible_builtins;
+                names.sort();
+                for name in &names {
+                    print_profile_entry(out, name, &builtins[*name], true)?;
+                }
+                writeln!(out)?;
+                writeln!(
+                    out,
+                    "{} ctail --profile {} {}",
+                    "Usage:".dimmed(),
+                    "<name>".cyan(),
+                    "<file>".dimmed(),
+                )?;
+                writeln!(
+                    out,
+                    "       command | ctail --profile {}",
+                    "<name>".cyan(),
+                )?;
             }
         }
         Some((cfg, path)) => {
-            if cfg.profiles.is_empty() {
+            let has_user_profiles = !cfg.profiles.is_empty();
+            let has_builtin_profiles = !visible_builtins.is_empty();
+
+            if !has_user_profiles && !has_builtin_profiles {
                 writeln!(out, "No profiles defined in {}", path.display())?;
             } else {
+                writeln!(out, "{}", "Available profiles:".bold())?;
+                writeln!(out)?;
+
+                // Show user-defined profiles first
                 let mut names: Vec<&String> = cfg.profiles.keys().collect();
                 names.sort();
-                for name in names {
-                    let count = cfg.profiles[name].rules.len();
-                    let label = if count == 1 { "rule" } else { "rules" };
-                    writeln!(out, "  {name} ({count} {label})")?;
+                for name in &names {
+                    let profile = &cfg.profiles[*name];
+                    print_profile_entry(out, name, profile, false)?;
                 }
+
+                // Show built-in profiles not overridden by user
+                let mut builtin_names: Vec<&String> = visible_builtins;
+                builtin_names.sort();
+                for name in &builtin_names {
+                    print_profile_entry(out, name, &builtins[*name], true)?;
+                }
+
                 writeln!(out)?;
-                writeln!(out, "Config: {}", path.display())?;
+                if has_user_profiles {
+                    writeln!(out, "{} {}", "Config:".dimmed(), path.display())?;
+                    writeln!(out)?;
+                }
+                writeln!(
+                    out,
+                    "{} ctail --profile {} {}",
+                    "Usage:".dimmed(),
+                    "<name>".cyan(),
+                    "<file>".dimmed(),
+                )?;
+                writeln!(
+                    out,
+                    "       command | ctail --profile {}",
+                    "<name>".cyan(),
+                )?;
             }
         }
+    }
+    Ok(())
+}
+
+/// Print a single profile entry in the listing.
+fn print_profile_entry(
+    out: &mut dyn Write,
+    name: &str,
+    profile: &ProfileConfig,
+    is_builtin: bool,
+) -> Result<()> {
+    if is_builtin {
+        writeln!(out, "  {} {}", name.cyan().bold(), "(built-in)".dimmed())?;
+    } else {
+        writeln!(out, "  {}", name.cyan().bold())?;
+    }
+
+    for rc in &profile.rules {
+        let rule_display = if rc.scope == "line" || rc.scope.is_empty() {
+            format!("{}:{}", rc.pattern, rc.style)
+        } else {
+            format!("{}:{}:{}", rc.pattern, rc.style, rc.scope)
+        };
+        writeln!(out, "    {}  {}", "style:".dimmed(), rule_display)?;
+    }
+    if !profile.trigger.is_empty() {
+        for t in &profile.trigger {
+            writeln!(out, "    {} {t}", "trigger:".dimmed())?;
+        }
+    }
+    if let Some(ref b) = profile.before {
+        writeln!(out, "    {}  {b}", "before:".dimmed())?;
+    }
+    if let Some(ref a) = profile.after {
+        writeln!(out, "    {}   {a}", "after:".dimmed())?;
+    }
+    if let Some(ref l) = profile.lines {
+        writeln!(out, "    {}   {l}", "lines:".dimmed())?;
+    }
+    if !profile.extensions.is_empty() {
+        writeln!(
+            out,
+            "    {} {}",
+            "auto:".dimmed(),
+            profile.extensions.iter().map(|e| format!(".{e}")).collect::<Vec<_>>().join(", ")
+        )?;
     }
     Ok(())
 }
@@ -369,14 +592,32 @@ style = "blue"
 
     // === print_profiles tests ===
 
+    fn strip_ansi(s: &str) -> String {
+        let re = regex::Regex::new(r"\x1b\[[0-9;]*m").unwrap();
+        re.replace_all(s, "").to_string()
+    }
+
+    fn profile_output(config_path: &Path) -> String {
+        let mut buf = Vec::new();
+        print_profiles_to(
+            None,
+            Some((&load_config(Some(config_path)).unwrap().unwrap().0, config_path.to_path_buf())),
+            &mut buf,
+        )
+        .unwrap();
+        strip_ansi(&String::from_utf8(buf).unwrap())
+    }
+
     #[test]
     fn print_profiles_no_config_file() {
         let tmp = TempDir::new().unwrap();
         let nonexistent = tmp.path().join("nonexistent.toml");
         let mut buf = Vec::new();
         print_profiles_to(Some(&nonexistent), None, &mut buf).unwrap();
-        let output = String::from_utf8(buf).unwrap();
-        assert!(output.contains("No config file found"), "Got: {output}");
+        let output = strip_ansi(&String::from_utf8(buf).unwrap());
+        // Even without a config file, built-in profiles are shown
+        assert!(output.contains("markdown"), "Expected built-in markdown profile. Got: {output}");
+        assert!(output.contains("(built-in)"), "Expected built-in tag. Got: {output}");
     }
 
     #[test]
@@ -403,16 +644,16 @@ style = "red"
         )
         .unwrap();
 
-        let mut buf = Vec::new();
-        print_profiles_to(None, Some((&load_config(Some(&config_path)).unwrap().unwrap().0, config_path.clone())), &mut buf).unwrap();
-        let output = String::from_utf8(buf).unwrap();
-        assert!(output.contains("django (1 rule)"), "Got: {output}");
-        assert!(output.contains("spring-boot (2 rules)"), "Got: {output}");
+        let output = profile_output(&config_path);
+        assert!(output.contains("django"), "Got: {output}");
+        assert!(output.contains("style:  django:green"), "Got: {output}");
+        assert!(output.contains("style:  spring1:blue"), "Got: {output}");
+        assert!(output.contains("style:  spring2:red"), "Got: {output}");
         assert!(output.contains(&config_path.display().to_string()), "Got: {output}");
     }
 
     #[test]
-    fn print_profiles_no_profiles_defined() {
+    fn print_profiles_no_user_profiles_shows_builtins() {
         let tmp = TempDir::new().unwrap();
         let config_path = tmp.path().join("config.toml");
         std::fs::write(
@@ -423,8 +664,10 @@ style = "red"
 
         let mut buf = Vec::new();
         print_profiles_to(None, Some((&load_config(Some(&config_path)).unwrap().unwrap().0, config_path.clone())), &mut buf).unwrap();
-        let output = String::from_utf8(buf).unwrap();
-        assert!(output.contains("No profiles defined"), "Got: {output}");
+        let output = strip_ansi(&String::from_utf8(buf).unwrap());
+        // Built-in profiles should still be shown
+        assert!(output.contains("markdown"), "Expected built-in markdown profile. Got: {output}");
+        assert!(output.contains("(built-in)"), "Expected built-in tag. Got: {output}");
     }
 
     #[test]
@@ -447,12 +690,38 @@ style = "green"
         )
         .unwrap();
 
-        let mut buf = Vec::new();
-        print_profiles_to(None, Some((&load_config(Some(&config_path)).unwrap().unwrap().0, config_path.clone())), &mut buf).unwrap();
-        let output = String::from_utf8(buf).unwrap();
+        let output = profile_output(&config_path);
         let alpha_pos = output.find("alpha").unwrap();
         let zebra_pos = output.find("zebra").unwrap();
         assert!(alpha_pos < zebra_pos, "Expected alpha before zebra in: {output}");
+    }
+
+    #[test]
+    fn print_profiles_with_trigger_settings() {
+        let tmp = TempDir::new().unwrap();
+        let config_path = tmp.path().join("config.toml");
+        std::fs::write(
+            &config_path,
+            r#"
+[profiles.unittest-errors]
+trigger = ['\.go:[0-9]+$']
+before = "^===.*"
+after = "^---.*"
+lines = "+1"
+"#,
+        )
+        .unwrap();
+
+        let output = profile_output(&config_path);
+        assert!(output.contains("    trigger:"), "Expected trigger info. Got: {output}");
+        assert!(output.contains("    before:  ^==="), "Expected before info. Got: {output}");
+        assert!(output.contains("    after:   ^---"), "Expected after info. Got: {output}");
+        assert!(output.contains("    lines:   +1"), "Expected lines info. Got: {output}");
+        // The unittest-errors profile itself should have no style rules
+        // (built-in markdown profile will have them, but we check unittest-errors section only)
+        let unittest_section = output.split("unittest-errors").nth(1).unwrap_or("");
+        let unittest_before_next = unittest_section.split("markdown").next().unwrap_or(unittest_section);
+        assert!(!unittest_before_next.contains("style:"), "unittest-errors should not show style rules. Got: {output}");
     }
 
     // === print_colors tests ===
@@ -499,6 +768,78 @@ style = "green"
         assert!(output.contains("#rrggbb"), "Got: {output}");
         assert!(output.contains("0-255"), "Got: {output}");
         assert!(output.contains("bg:"), "Got: {output}");
+    }
+
+    // === builtin_profiles tests ===
+
+    #[test]
+    fn builtin_profiles_contains_markdown() {
+        let profiles = builtin_profiles();
+        assert!(profiles.contains_key("markdown"), "Expected 'markdown' built-in profile");
+        let md = &profiles["markdown"];
+        assert!(!md.rules.is_empty(), "Markdown profile should have rules");
+        assert!(md.rules.len() >= 10, "Expected at least 10 markdown rules, got {}", md.rules.len());
+        assert_eq!(md.extensions, vec!["md", "markdown", "mdx"]);
+        assert_eq!(md.lines, Some("+1".to_string()));
+    }
+
+    #[test]
+    fn user_profile_overrides_builtin() {
+        let mut buf = Vec::new();
+        let config = Config {
+            rules: vec![],
+            profiles: {
+                let mut p = HashMap::new();
+                p.insert(
+                    "markdown".to_string(),
+                    ProfileConfig {
+                        rules: vec![RuleConfig {
+                            pattern: "CUSTOM".to_string(),
+                            style: "red".to_string(),
+                            scope: "line".to_string(),
+                        }],
+                        trigger: vec![],
+                        before: None,
+                        after: None,
+                        lines: None,
+                        extensions: vec![],
+                    },
+                );
+                p
+            },
+        };
+        print_profiles_to(
+            None,
+            Some((&config, PathBuf::from("/tmp/test.toml"))),
+            &mut buf,
+        )
+        .unwrap();
+        let output = strip_ansi(&String::from_utf8(buf).unwrap());
+        // User markdown profile should appear without (built-in) tag
+        assert!(output.contains("markdown"), "Expected markdown in output. Got: {output}");
+        assert!(!output.contains("markdown (built-in)"), "User override should not show built-in tag for markdown. Got: {output}");
+        assert!(output.contains("CUSTOM"), "Expected user's CUSTOM rule. Got: {output}");
+    }
+
+    #[test]
+    fn find_profile_by_extension_md() {
+        let profiles = builtin_profiles();
+        let result = find_profile_by_extension("md", &profiles);
+        assert_eq!(result, Some("markdown".to_string()));
+    }
+
+    #[test]
+    fn find_profile_by_extension_markdown() {
+        let profiles = builtin_profiles();
+        let result = find_profile_by_extension("markdown", &profiles);
+        assert_eq!(result, Some("markdown".to_string()));
+    }
+
+    #[test]
+    fn find_profile_by_extension_unknown() {
+        let profiles = builtin_profiles();
+        let result = find_profile_by_extension("txt", &profiles);
+        assert!(result.is_none());
     }
 
     #[test]

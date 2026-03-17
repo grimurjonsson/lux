@@ -84,20 +84,37 @@ fn run() -> anyhow::Result<()> {
     // Load config file
     let config = config::load_config(cli.config.as_deref().map(Path::new))?;
 
-    // Validate --profile requires config
-    if cli.profile.is_some() && config.is_none() {
-        anyhow::bail!("no config file found; cannot use --profile");
+    // Build merged profiles: built-in first, user profiles override
+    let mut merged_profiles = config::builtin_profiles();
+    if let Some((ref cfg, _)) = config {
+        for (k, v) in &cfg.profiles {
+            merged_profiles.insert(k.clone(), v.clone());
+        }
     }
 
-    // Look up profile for trigger/before/after/lines settings
-    let profile = cli.profile.as_deref().and_then(|name| {
-        config.as_ref().and_then(|(c, _)| c.profiles.get(name))
-    });
+    // Determine active profile: explicit --profile > extension auto-select > None
+    let active_profile_name: Option<String> = if cli.profile.is_some() {
+        cli.profile.clone()
+    } else if let Some(ref file_path) = cli.file {
+        // Auto-select profile by file extension
+        std::path::Path::new(file_path)
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .and_then(|ext| config::find_profile_by_extension(ext, &merged_profiles))
+    } else {
+        None
+    };
+
+    // Look up the active profile config
+    let profile = active_profile_name
+        .as_deref()
+        .and_then(|name| merged_profiles.get(name));
 
     let rules = build_rules_with_config(
         &cli.rules,
         config.as_ref().map(|(c, _)| c),
-        cli.profile.as_deref(),
+        active_profile_name.as_deref(),
+        Some(&merged_profiles),
     )?;
     let engine = Engine::new(rules, color_mode.color_enabled());
 

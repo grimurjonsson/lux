@@ -12,6 +12,7 @@ regex = "1.12.3"
 serde = { version = "1.0.228", features = ["derive"] }
 supports-color = "3.0.2"
 notify = "8.0"
+terminal_size = "0.4"
 toml = "1.0.6"
 
 [dev-dependencies]

@@ -800,17 +800,20 @@ fn ask_rule_or_raw(
     let mode = ask(
         reader,
         out,
-        "Add rule: (w)izard or (r)aw format?",
-        Some("w"),
+        "Add style rule? (Enter)wizard / (r)aw / (d)one",
+        None,
     )?;
+    if mode.eq_ignore_ascii_case("d") {
+        return Ok(None);
+    }
     if mode.eq_ignore_ascii_case("r") {
-        // Raw format
         let input = ask(reader, out, "Rule (PATTERN:STYLE[:SCOPE])", None)?;
         if input.is_empty() {
             return Ok(None);
         }
         parse_raw_rule_input(&input, out)
     } else {
+        // Empty (Enter) or 'w' → wizard
         ask_rule_interactive(reader, out)
     }
 }

@@ -145,10 +145,14 @@ pub fn build_rules(cli_rules: &[String]) -> Result<Vec<Rule>> {
 /// 2. Global config rules (next band)
 /// 3. Profile rules (next band, if profile active)
 /// 4. Default rules (highest priority numbers)
+///
+/// The `merged_profiles` parameter allows passing pre-merged profiles (user + built-in)
+/// so that built-in profiles like "markdown" work without a config file.
 pub fn build_rules_with_config(
     cli_rules: &[String],
     config: Option<&Config>,
     profile_name: Option<&str>,
+    merged_profiles: Option<&std::collections::HashMap<String, crate::config::ProfileConfig>>,
 ) -> Result<Vec<Rule>> {
     let mut rules = Vec::new();
 
@@ -159,41 +163,54 @@ pub fn build_rules_with_config(
 
     let mut offset = rules.len();
 
-    // Global config rules
-    if let Some(cfg) = config {
-        for rc in &cfg.rules {
-            rules.push(rule_from_config(&rc.pattern, &rc.style, &rc.scope, offset)?);
-            offset += 1;
-        }
-    }
-
-    // Profile rules
+    // Profile rules -- higher priority than global rules so profile styling wins
     if let Some(name) = profile_name {
-        match config {
-            None => {
-                bail!("no config file found; cannot use --profile");
-            }
-            Some(cfg) => {
-                let profile = cfg.profiles.get(name).ok_or_else(|| {
-                    let available: Vec<&str> = cfg.profiles.keys().map(|k| k.as_str()).collect();
-                    if available.is_empty() {
-                        anyhow::anyhow!("profile '{name}' not found. No profiles defined in config")
-                    } else {
-                        let mut sorted = available;
-                        sorted.sort();
-                        anyhow::anyhow!(
-                            "profile '{name}' not found. Available: {}",
-                            sorted.join(", ")
-                        )
-                    }
-                })?;
-                for rc in &profile.rules {
+        let profile = if let Some(merged) = merged_profiles {
+            merged.get(name)
+        } else {
+            config.and_then(|cfg| cfg.profiles.get(name))
+        };
+
+        match profile {
+            Some(p) => {
+                for rc in &p.rules {
                     rules.push(rule_from_config(
                         &rc.pattern, &rc.style, &rc.scope, offset,
                     )?);
                     offset += 1;
                 }
             }
+            None => {
+                // Build available list from merged_profiles or config
+                let available: Vec<String> = if let Some(merged) = merged_profiles {
+                    let mut keys: Vec<String> = merged.keys().cloned().collect();
+                    keys.sort();
+                    keys
+                } else if let Some(cfg) = config {
+                    let mut keys: Vec<&str> = cfg.profiles.keys().map(|k| k.as_str()).collect();
+                    keys.sort();
+                    keys.into_iter().map(|s| s.to_string()).collect()
+                } else {
+                    bail!("no config file found; cannot use --profile");
+                };
+
+                if available.is_empty() {
+                    bail!("profile '{name}' not found. No profiles defined in config");
+                } else {
+                    bail!(
+                        "profile '{name}' not found. Available: {}",
+                        available.join(", ")
+                    );
+                }
+            }
+        }
+    }
+
+    // Global config rules -- lower priority than profile rules
+    if let Some(cfg) = config {
+        for rc in &cfg.rules {
+            rules.push(rule_from_config(&rc.pattern, &rc.style, &rc.scope, offset)?);
+            offset += 1;
         }
     }
 
@@ -419,7 +436,7 @@ mod tests {
 
     #[test]
     fn test_build_with_config_no_config() {
-        let rules = build_rules_with_config(&[], None, None).unwrap();
+        let rules = build_rules_with_config(&[], None, None, None).unwrap();
         assert_eq!(rules.len(), 5); // defaults only
     }
 
@@ -430,7 +447,7 @@ mod tests {
             profiles: HashMap::new(),
         };
         let cli = vec!["ERROR:red".to_string()];
-        let rules = build_rules_with_config(&cli, Some(&config), None).unwrap();
+        let rules = build_rules_with_config(&cli, Some(&config), None, None).unwrap();
         // 1 CLI + 1 config + 5 defaults = 7
         assert_eq!(rules.len(), 7);
         assert_eq!(rules[0].priority, 0); // CLI
@@ -445,17 +462,22 @@ mod tests {
             "django".to_string(),
             ProfileConfig {
                 rules: vec![make_rule_config("django", "green")],
+                trigger: vec![],
+                before: None,
+                after: None,
+                lines: None,
+                extensions: vec![],
             },
         );
         let config = Config {
             rules: vec![make_rule_config("GLOBAL", "blue")],
             profiles,
         };
-        let rules = build_rules_with_config(&[], Some(&config), Some("django")).unwrap();
+        let rules = build_rules_with_config(&[], Some(&config), Some("django"), None).unwrap();
         // 1 global + 1 profile + 5 defaults = 7
         assert_eq!(rules.len(), 7);
-        assert!(rules[0].pattern.is_match("GLOBAL"));
-        assert!(rules[1].pattern.is_match("django"));
+        assert!(rules[0].pattern.is_match("django"));
+        assert!(rules[1].pattern.is_match("GLOBAL"));
     }
 
     #[test]
@@ -466,12 +488,12 @@ mod tests {
                 let mut p = HashMap::new();
                 p.insert(
                     "spring".to_string(),
-                    ProfileConfig { rules: vec![] },
+                    ProfileConfig { rules: vec![], trigger: vec![], before: None, after: None, lines: None, extensions: vec![] },
                 );
                 p
             },
         };
-        let result = build_rules_with_config(&[], Some(&config), Some("nginx"));
+        let result = build_rules_with_config(&[], Some(&config), Some("nginx"), None);
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("nginx"), "Got: {msg}");
@@ -480,7 +502,7 @@ mod tests {
 
     #[test]
     fn test_build_with_config_profile_no_config() {
-        let result = build_rules_with_config(&[], None, Some("django"));
+        let result = build_rules_with_config(&[], None, Some("django"), None);
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("no config file found"), "Got: {msg}");

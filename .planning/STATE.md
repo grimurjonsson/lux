@@ -121,9 +121,10 @@ None yet.
 | 1 | Context buffer with trigger pattern output | 2026-03-13 | 44d1434 | [1-context-buffer-with-trigger-pattern-outp](./quick/1-context-buffer-with-trigger-pattern-outp/) |
 | 2 | Interactive style rule wizard with color preview | 2026-03-13 | f71c1f4 | [2-interactive-style-rule-wizard-with-color](./quick/2-interactive-style-rule-wizard-with-color/) |
 | 3 | Add cyan separator line between trigger groups | 2026-03-13 | bbc2963 | [3-add-cyan-separator-line-between-trigger-](./quick/3-add-cyan-separator-line-between-trigger-/) |
+| 4 | Add markdown profile with color coding and auto-select | 2026-03-17 | 5d24a3f | [260317-jhb-add-markdown-profile-with-color-coding-a](./quick/260317-jhb-add-markdown-profile-with-color-coding-a/) |
 
 ## Session Continuity
 
-Last session: 2026-03-13T12:45:00.000Z
-Stopped at: Completed quick-3 (cyan trigger separator)
+Last session: 2026-03-17T14:09:00.000Z
+Stopped at: Completed quick-260317-jhb (markdown profile with extension auto-selection)
 Resume file: None
