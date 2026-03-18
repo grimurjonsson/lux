@@ -8,6 +8,9 @@ on:
 permissions:
   contents: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build-and-release:
     name: Build and Release
@@ -31,11 +34,6 @@ jobs:
             target: aarch64-apple-darwin
             use_cross: false
 
-          # Windows build
-          - os: ubuntu-latest
-            target: x86_64-pc-windows-gnu
-            use_cross: true
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -57,17 +55,10 @@ jobs:
         if: ${{ !matrix.use_cross }}
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Prepare binaries (Unix)
-        if: ${{ !contains(matrix.target, 'windows') }}
+      - name: Prepare binaries
         run: |
           mkdir -p release-assets
           tar -czvf release-assets/lux-${{ matrix.target }}.tar.gz -C target/${{ matrix.target }}/release lux
-
-      - name: Prepare binaries (Windows)
-        if: contains(matrix.target, 'windows')
-        run: |
-          mkdir -p release-assets
-          (cd target/${{ matrix.target }}/release && zip ../../../release-assets/lux-${{ matrix.target }}.zip lux.exe)
 
       - name: Upload binaries to release
         uses: softprops/action-gh-release@v2

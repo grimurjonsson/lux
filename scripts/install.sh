@@ -43,8 +43,7 @@ case "$ARCH" in
         ;;
 esac
 
-# Map OS names and set binary extension
-BINARY_EXT=""
+# Map OS names
 case "$OS" in
     darwin)
         PLATFORM="apple-darwin"
@@ -52,13 +51,9 @@ case "$OS" in
     linux)
         PLATFORM="unknown-linux-gnu"
         ;;
-    mingw*|msys*|cygwin*)
-        PLATFORM="pc-windows-gnu"
-        BINARY_EXT=".exe"
-        ;;
     *)
         echo -e "${RED}${BOLD}✗${RESET} Unsupported OS: ${BOLD}$OS${RESET}"
-        echo -e "   Supported: macOS (darwin), Linux, Windows"
+        echo -e "   Supported: macOS (darwin), Linux"
         exit 1
         ;;
 esac
@@ -230,19 +225,12 @@ if [ ! -w "$INSTALL_DIR" ]; then
     echo ""
 fi
 
-# Determine archive extension
-if [ -z "$BINARY_EXT" ]; then
-    ARCHIVE_EXT=".tar.gz"
-else
-    ARCHIVE_EXT=".zip"
-fi
-
-DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${LATEST_TAG}/${BINARY_NAME}-${TARGET}${ARCHIVE_EXT}"
+DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${LATEST_TAG}/${BINARY_NAME}-${TARGET}.tar.gz"
 
 echo -e "${BLUE}↓${RESET} Downloading ${BOLD}${BINARY_NAME}${RESET}..."
 
 TEMP_DIR=$(mktemp -d)
-TEMP_ARCHIVE="${TEMP_DIR}/archive${ARCHIVE_EXT}"
+TEMP_ARCHIVE="${TEMP_DIR}/archive.tar.gz"
 
 if ! curl -L -f -o "$TEMP_ARCHIVE" "$DOWNLOAD_URL" 2>/dev/null; then
     echo -e "${RED}${BOLD}✗${RESET} Download failed"
@@ -253,22 +241,14 @@ if ! curl -L -f -o "$TEMP_ARCHIVE" "$DOWNLOAD_URL" 2>/dev/null; then
 fi
 
 echo -e "${BLUE}↓${RESET} Extracting ${BOLD}${BINARY_NAME}${RESET}..."
-if [ -z "$BINARY_EXT" ]; then
-    tar -xzf "$TEMP_ARCHIVE" -C "$TEMP_DIR" || {
-        echo -e "${RED}${BOLD}✗${RESET} Failed to extract archive"
-        rm -rf "$TEMP_DIR"
-        exit 1
-    }
-else
-    unzip -q "$TEMP_ARCHIVE" -d "$TEMP_DIR" || {
-        echo -e "${RED}${BOLD}✗${RESET} Failed to extract archive"
-        rm -rf "$TEMP_DIR"
-        exit 1
-    }
-fi
+tar -xzf "$TEMP_ARCHIVE" -C "$TEMP_DIR" || {
+    echo -e "${RED}${BOLD}✗${RESET} Failed to extract archive"
+    rm -rf "$TEMP_DIR"
+    exit 1
+}
 
-EXTRACTED_BINARY="${TEMP_DIR}/${BINARY_NAME}${BINARY_EXT}"
-DEST="${INSTALL_DIR}/${BINARY_NAME}${BINARY_EXT}"
+EXTRACTED_BINARY="${TEMP_DIR}/${BINARY_NAME}"
+DEST="${INSTALL_DIR}/${BINARY_NAME}"
 
 if [ ! -f "$EXTRACTED_BINARY" ]; then
     echo -e "${RED}${BOLD}✗${RESET} Binary not found in archive"
