@@ -190,7 +190,7 @@ pub fn run(
                         // File disappeared in -F mode
                         if !path.exists() {
                             eprintln!(
-                                "ctail: '{}' has disappeared; waiting...",
+                                "lux: '{}' has disappeared; waiting...",
                                 path.display()
                             );
                             // Poll until file reappears
@@ -198,7 +198,7 @@ pub fn run(
                                 std::thread::sleep(Duration::from_secs(1));
                                 if path.exists() {
                                     eprintln!(
-                                        "ctail: '{}' has appeared; following new file",
+                                        "lux: '{}' has appeared; following new file",
                                         path.display()
                                     );
                                     let new_file = File::open(path)?;
@@ -221,7 +221,7 @@ pub fn run(
                 }
             }
             Ok(Err(e)) => {
-                eprintln!("ctail: watch error: {e}");
+                eprintln!("lux: watch error: {e}");
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 consecutive_timeouts += 1;
@@ -303,7 +303,7 @@ pub fn run_waiting(
         std::thread::sleep(Duration::from_secs(1));
         if path.exists() {
             eprintln!(
-                "ctail: '{}' has appeared; following new file",
+                "lux: '{}' has appeared; following new file",
                 path.display()
             );
             let file = File::open(path)?;

@@ -4,18 +4,18 @@ use std::path::Path;
 use anyhow::Context;
 use clap::{CommandFactory, Parser};
 
-use ctail::cli::{Cli, Command, ProfileAction, StripAnsi};
+use lux::cli::{Cli, Command, ProfileAction, StripAnsi};
 use clap_complete::generate;
-use ctail::config;
-use ctail::engine::Engine;
-use ctail::filter::LineFilter;
-use ctail::follow;
-use ctail::output::detect_color_mode;
-use ctail::rules::build_rules_with_config;
-use ctail::syntax::SyntaxHighlighter;
-use ctail::tail::{self, LineSpec};
-use ctail::trigger::{OutputDecision, TriggerFilter};
-use ctail::wizard;
+use lux::config;
+use lux::engine::Engine;
+use lux::filter::LineFilter;
+use lux::follow;
+use lux::output::detect_color_mode;
+use lux::rules::build_rules_with_config;
+use lux::syntax::SyntaxHighlighter;
+use lux::tail::{self, LineSpec};
+use lux::trigger::{OutputDecision, TriggerFilter};
+use lux::wizard;
 
 fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -25,7 +25,7 @@ fn run() -> anyhow::Result<()> {
         match cmd {
             Command::Completions { shell } => {
                 let mut cmd = Cli::command();
-                generate(*shell, &mut cmd, "ctail", &mut std::io::stdout());
+                generate(*shell, &mut cmd, "lux", &mut std::io::stdout());
                 std::process::exit(0);
             }
             Command::Profile { action } => {
@@ -269,7 +269,7 @@ fn run() -> anyhow::Result<()> {
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                     eprintln!(
-                        "ctail: '{}' does not exist; waiting for it to be created...",
+                        "lux: '{}' does not exist; waiting for it to be created...",
                         file_path
                     );
                     let trigger_opt = if trigger_filter.is_active() {
@@ -383,7 +383,7 @@ fn main() {
         {
             std::process::exit(0);
         }
-        eprintln!("ctail: {e:#}");
+        eprintln!("lux: {e:#}");
         std::process::exit(1);
     }
 }

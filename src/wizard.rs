@@ -40,7 +40,7 @@ fn run_wizard(
     out: &mut impl Write,
     explicit_config: Option<&Path>,
 ) -> Result<()> {
-    writeln!(out, "{}", "Create a new ctail profile".bold())?;
+    writeln!(out, "{}", "Create a new lux profile".bold())?;
     writeln!(out)?;
 
     // 1. Profile name
@@ -177,7 +177,7 @@ fn run_wizard(
     writeln!(out)?;
     writeln!(
         out,
-        "{} ctail --profile {} {}",
+        "{} lux --profile {} {}",
         "Usage:".dimmed(),
         name.cyan(),
         "<file>".dimmed(),

@@ -123,7 +123,7 @@ impl TriggerFilter {
 
     /// Return the separator string between trigger groups.
     fn separator(&self) -> String {
-        let label = "--- ctail ---";
+        let label = "--- lux ---";
         let width = terminal_size::terminal_size()
             .map(|(w, _)| w.0 as usize)
             .unwrap_or(80);
@@ -418,7 +418,7 @@ mod tests {
         let first = tf.process_line("TRIGGER one", "TRIGGER one".to_string());
         match first {
             OutputDecision::Flush(lines) => {
-                assert!(lines.iter().all(|l| !l.contains("--- ctail ---")));
+                assert!(lines.iter().all(|l| !l.contains("--- lux ---")));
                 assert_eq!(lines, vec!["ctx1", "TRIGGER one"]);
             }
             other => panic!("Expected Flush, got {:?}", other),
@@ -428,7 +428,7 @@ mod tests {
         let second = tf.process_line("TRIGGER two", "TRIGGER two".to_string());
         match second {
             OutputDecision::Flush(lines) => {
-                assert!(lines[0].contains("--- ctail ---"), "separator should contain label");
+                assert!(lines[0].contains("--- lux ---"), "separator should contain label");
                 assert_eq!(lines.len(), 3); // separator, ctx2, TRIGGER two
                 assert_eq!(lines[1], "ctx2");
                 assert_eq!(lines[2], "TRIGGER two");
@@ -640,7 +640,7 @@ mod tests {
                     "Expected cyan+bg ANSI code in separator: {:?}",
                     lines[0]
                 );
-                assert!(lines[0].contains("--- ctail ---"));
+                assert!(lines[0].contains("--- lux ---"));
                 assert!(lines[0].ends_with("\x1b[0m"));
             }
             other => panic!("Expected Flush, got {:?}", other),

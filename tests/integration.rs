@@ -6,8 +6,8 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 use tempfile::TempDir;
 
-fn ctail() -> Command {
-    Command::cargo_bin("ctail").unwrap()
+fn lux() -> Command {
+    Command::cargo_bin("lux").unwrap()
 }
 
 /// Helper: check if output contains ANSI escape sequences.
@@ -17,7 +17,7 @@ fn has_ansi_codes(s: &str) -> bool {
 
 #[test]
 fn pipe_stdin_passthrough() {
-    ctail()
+    lux()
         .arg("--color")
         .arg("never")
         .write_stdin("hello world\n")
@@ -28,7 +28,7 @@ fn pipe_stdin_passthrough() {
 
 #[test]
 fn default_error_coloring() {
-    let output = ctail()
+    let output = lux()
         .arg("--color")
         .arg("always")
         .write_stdin("ERROR: something broke\n")
@@ -43,7 +43,7 @@ fn default_error_coloring() {
 
 #[test]
 fn default_warn_coloring() {
-    let output = ctail()
+    let output = lux()
         .arg("--color")
         .arg("always")
         .write_stdin("WARNING: disk full\n")
@@ -58,7 +58,7 @@ fn default_warn_coloring() {
 
 #[test]
 fn default_debug_coloring() {
-    let output = ctail()
+    let output = lux()
         .arg("--color")
         .arg("always")
         .write_stdin("DEBUG: entering function\n")
@@ -73,7 +73,7 @@ fn default_debug_coloring() {
 
 #[test]
 fn unmatched_passthrough() {
-    let output = ctail()
+    let output = lux()
         .arg("--color")
         .arg("always")
         .write_stdin("just a normal line\n")
@@ -89,7 +89,7 @@ fn unmatched_passthrough() {
 
 #[test]
 fn custom_rule() {
-    let output = ctail()
+    let output = lux()
         .args(["-r", "TODO:green", "--color", "always"])
         .write_stdin("TODO: fix this\n")
         .output()
@@ -103,27 +103,27 @@ fn custom_rule() {
 
 #[test]
 fn invalid_rule_exits() {
-    ctail()
+    lux()
         .args(["-r", "invalid"])
         .write_stdin("")
         .assert()
         .failure()
-        .stderr(predicate::str::contains("ctail:"));
+        .stderr(predicate::str::contains("lux:"));
 }
 
 #[test]
 fn invalid_regex_exits() {
-    ctail()
+    lux()
         .args(["-r", "(unclosed:red"])
         .write_stdin("")
         .assert()
         .failure()
-        .stderr(predicate::str::contains("ctail:"));
+        .stderr(predicate::str::contains("lux:"));
 }
 
 #[test]
 fn no_color_env() {
-    let output = ctail()
+    let output = lux()
         .env("NO_COLOR", "1")
         .write_stdin("ERROR: test\n")
         .output()
@@ -137,7 +137,7 @@ fn no_color_env() {
 
 #[test]
 fn color_never_flag() {
-    let output = ctail()
+    let output = lux()
         .args(["--color", "never"])
         .write_stdin("ERROR: test\n")
         .output()
@@ -159,7 +159,7 @@ fn sigpipe_clean_exit() {
 
 #[test]
 fn multiple_rules() {
-    let output = ctail()
+    let output = lux()
         .args([
             "-r",
             "CUSTOM1:green",
@@ -207,7 +207,7 @@ style = "green"
 "#,
     );
 
-    let output = ctail()
+    let output = lux()
         .args(["--config", config_path.to_str().unwrap(), "--color", "always"])
         .write_stdin("CUSTOM_PATTERN: test line\n")
         .output()
@@ -232,7 +232,7 @@ style = "blue"
 "#,
     );
 
-    let output = ctail()
+    let output = lux()
         .args([
             "--config",
             config_path.to_str().unwrap(),
@@ -264,7 +264,7 @@ style = "green"
 "#,
     );
 
-    ctail()
+    lux()
         .args([
             "--config",
             config_path.to_str().unwrap(),
@@ -283,7 +283,7 @@ fn malformed_config_error() {
     let tmp = TempDir::new().unwrap();
     let config_path = write_config(&tmp, "[[rules]\nbad toml\n");
 
-    ctail()
+    lux()
         .args(["--config", config_path.to_str().unwrap()])
         .write_stdin("")
         .assert()
@@ -293,7 +293,7 @@ fn malformed_config_error() {
 
 #[test]
 fn missing_config_file_error() {
-    ctail()
+    lux()
         .args(["--config", "/nonexistent/path/config.toml"])
         .write_stdin("")
         .assert()
@@ -307,7 +307,7 @@ fn missing_config_file_error() {
 fn list_profiles_no_config() {
     // Even without a config file, built-in profiles are shown
     let tmp = TempDir::new().unwrap();
-    ctail()
+    lux()
         .args(["--list-profiles"])
         .env("XDG_CONFIG_HOME", tmp.path().to_str().unwrap())
         .env_remove("HOME")
@@ -339,7 +339,7 @@ style = "yellow"
 "#,
     );
 
-    ctail()
+    lux()
         .args(["--list-profiles", "--config", config_path.to_str().unwrap()])
         .assert()
         .success()
@@ -362,7 +362,7 @@ style = "red"
 "#,
     );
 
-    ctail()
+    lux()
         .args(["--list-profiles", "--config", config_path.to_str().unwrap()])
         .assert()
         .success()
@@ -372,7 +372,7 @@ style = "red"
 
 #[test]
 fn list_colors_output() {
-    ctail()
+    lux()
         .args(["--list-colors"])
         .assert()
         .success()
@@ -385,7 +385,7 @@ fn list_colors_output() {
 #[test]
 fn list_colors_forces_color() {
     // assert_cmd runs without a tty, so color would normally be suppressed
-    let output = ctail()
+    let output = lux()
         .args(["--list-colors"])
         .output()
         .unwrap();
@@ -409,7 +409,7 @@ style = "red"
     );
 
     // assert_cmd has a default timeout; if the command hangs waiting for stdin, this will fail
-    ctail()
+    lux()
         .args(["--list-profiles", "--config", config_path.to_str().unwrap()])
         .assert()
         .success();
@@ -421,7 +421,7 @@ style = "red"
 fn trigger_basic() {
     // With --trigger ERROR, only lines around the trigger should appear
     let input = "line1\nline2\nline3\nERROR boom\nline4\nline5\nline6\nline7\n";
-    let output = ctail()
+    let output = lux()
         .args(["--trigger", "ERROR", "--before", "1", "--after", "1", "--color", "never"])
         .write_stdin(input)
         .output()
@@ -455,7 +455,7 @@ fn trigger_basic() {
 #[test]
 fn trigger_before_after() {
     let input = "a\nb\nc\nd\nERROR here\ne\nf\ng\nh\n";
-    let output = ctail()
+    let output = lux()
         .args(["--trigger", "ERROR", "--before", "2", "--after", "2", "--color", "never"])
         .write_stdin(input)
         .output()
@@ -476,7 +476,7 @@ fn trigger_before_after() {
 fn trigger_passthrough() {
     // Without --trigger, output should be identical to normal mode
     let input = "hello\nworld\n";
-    let output = ctail()
+    let output = lux()
         .args(["--color", "never"])
         .write_stdin(input)
         .output()
@@ -489,7 +489,7 @@ fn trigger_passthrough() {
 fn trigger_multiple() {
     // Multiple --trigger flags should OR together
     let input = "line1\nERROR bad\nline2\nline3\nWARN oops\nline4\n";
-    let output = ctail()
+    let output = lux()
         .args([
             "--trigger", "ERROR", "--trigger", "WARN",
             "--before", "0", "--after", "0", "--color", "never",
@@ -516,9 +516,9 @@ fn trigger_multiple() {
 
 #[test]
 fn trigger_separator() {
-    // Verify "--- ctail ---" separator between trigger groups
+    // Verify "--- lux ---" separator between trigger groups
     let input = "a\nERROR one\nb\nc\nERROR two\nd\n";
-    let output = ctail()
+    let output = lux()
         .args(["--trigger", "ERROR", "--before", "0", "--after", "0", "--color", "never"])
         .write_stdin(input)
         .output()
@@ -526,19 +526,19 @@ fn trigger_separator() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let lines: Vec<&str> = stdout.lines().collect();
     // First trigger group: ERROR one
-    // Separator: --- ctail ---
+    // Separator: --- lux ---
     // Second trigger group: ERROR two
     assert_eq!(lines.len(), 3, "Expected 3 lines: {lines:?}");
     assert_eq!(lines[0], "ERROR one");
-    assert!(lines[1].contains("--- ctail ---"), "separator should contain label: {:?}", lines[1]);
+    assert!(lines[1].contains("--- lux ---"), "separator should contain label: {:?}", lines[1]);
     assert_eq!(lines[2], "ERROR two");
 }
 
 // === File following integration tests ===
 
-/// Get the path to the built ctail binary.
-fn ctail_bin() -> std::path::PathBuf {
-    assert_cmd::cargo::cargo_bin("ctail")
+/// Get the path to the built lux binary.
+fn lux_bin() -> std::path::PathBuf {
+    assert_cmd::cargo::cargo_bin("lux")
 }
 
 /// Create a temp file with the given content and return (dir, file_path).
@@ -553,19 +553,19 @@ fn make_temp_log(content: &str) -> (TempDir, std::path::PathBuf) {
 
 #[test]
 fn print_and_exit_last_n() {
-    // ctail -n 5 <file> should print 5 lines and exit (NOT block)
+    // lux -n 5 <file> should print 5 lines and exit (NOT block)
     // Use StdCommand with null stdin to avoid piped-stdin conflict detection
     let lines: String = (1..=20).map(|i| format!("line {i}\n")).collect();
     let (_dir, path) = make_temp_log(&lines);
 
-    let output = StdCommand::new(ctail_bin())
+    let output = StdCommand::new(lux_bin())
         .args(["-n", "5", "--color", "never"])
         .arg(path.to_str().unwrap())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
-        .expect("failed to run ctail");
+        .expect("failed to run lux");
 
     assert!(output.status.success(), "Expected exit 0, got: {:?}", output.status);
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -578,15 +578,15 @@ fn print_and_exit_last_n() {
 
 #[test]
 fn missing_file_f_errors() {
-    // ctail -f nonexistent.log should exit with error
+    // lux -f nonexistent.log should exit with error
     // Use StdCommand with null stdin to avoid piped-stdin conflict detection
-    let output = StdCommand::new(ctail_bin())
+    let output = StdCommand::new(lux_bin())
         .args(["-f", "nonexistent_file_12345.log"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
-        .expect("failed to run ctail");
+        .expect("failed to run lux");
 
     assert!(!output.status.success(), "Expected failure exit code");
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -598,11 +598,11 @@ fn missing_file_f_errors() {
 
 #[test]
 fn file_stdin_conflict() {
-    // echo test | ctail app.log should fail
+    // echo test | lux app.log should fail
     // assert_cmd pipes stdin by default, which is exactly what we want here
     let (_dir, path) = make_temp_log("test content\n");
 
-    ctail()
+    lux()
         .arg(path.to_str().unwrap())
         .write_stdin("piped input\n")
         .assert()
@@ -612,18 +612,18 @@ fn file_stdin_conflict() {
 
 #[test]
 fn follow_reads_new_lines() {
-    // Spawn ctail -f, append lines, verify they appear in output
+    // Spawn lux -f, append lines, verify they appear in output
     let lines: String = (1..=5).map(|i| format!("line {i}\n")).collect();
     let (_dir, path) = make_temp_log(&lines);
 
-    let mut child = StdCommand::new(ctail_bin())
+    let mut child = StdCommand::new(lux_bin())
         .args(["-f", "--color", "never"])
         .arg(path.to_str().unwrap())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("failed to spawn ctail");
+        .expect("failed to spawn lux");
 
     // Give it time to start and print initial lines
     std::thread::sleep(Duration::from_millis(500));
@@ -654,11 +654,11 @@ fn follow_reads_new_lines() {
 
 #[test]
 fn bare_file_prints_and_exits() {
-    // ctail <file> (no flags) should print last 20 lines and exit (not follow)
+    // lux <file> (no flags) should print last 20 lines and exit (not follow)
     let lines: String = (1..=30).map(|i| format!("line {i}\n")).collect();
     let (_dir, path) = make_temp_log(&lines);
 
-    let output = StdCommand::new(ctail_bin())
+    let output = StdCommand::new(lux_bin())
         .arg("--color")
         .arg("never")
         .arg(path.to_str().unwrap())
@@ -666,9 +666,9 @@ fn bare_file_prints_and_exits() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
-        .expect("failed to run ctail");
+        .expect("failed to run lux");
 
-    assert!(output.status.success(), "ctail should exit successfully");
+    assert!(output.status.success(), "lux should exit successfully");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let out_lines: Vec<&str> = stdout.lines().collect();
     assert_eq!(out_lines.len(), 20, "bare file should show last 20 lines");
@@ -678,18 +678,18 @@ fn bare_file_prints_and_exits() {
 
 #[test]
 fn n_with_follow_flag() {
-    // ctail -n 5 -f file should show 5 lines and then follow (NOT print and exit)
+    // lux -n 5 -f file should show 5 lines and then follow (NOT print and exit)
     let lines: String = (1..=20).map(|i| format!("line {i}\n")).collect();
     let (_dir, path) = make_temp_log(&lines);
 
-    let mut child = StdCommand::new(ctail_bin())
+    let mut child = StdCommand::new(lux_bin())
         .args(["-n", "5", "-f", "--color", "never"])
         .arg(path.to_str().unwrap())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("failed to spawn ctail");
+        .expect("failed to spawn lux");
 
     // Wait and check it's still running (following, not exited)
     std::thread::sleep(Duration::from_millis(500));
@@ -712,7 +712,7 @@ fn n_with_follow_flag() {
 
 #[test]
 fn follow_name_rotation() {
-    // Create file, spawn ctail -F, rename file, create new file, write to it
+    // Create file, spawn lux -F, rename file, create new file, write to it
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("app.log");
     {
@@ -722,14 +722,14 @@ fn follow_name_rotation() {
         f.flush().unwrap();
     }
 
-    let mut child = StdCommand::new(ctail_bin())
+    let mut child = StdCommand::new(lux_bin())
         .args(["-F", "--color", "never"])
         .arg(path.to_str().unwrap())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("failed to spawn ctail");
+        .expect("failed to spawn lux");
 
     // Wait for it to start
     std::thread::sleep(Duration::from_millis(500));
@@ -763,7 +763,7 @@ fn follow_name_rotation() {
 
 #[test]
 fn follow_copytruncate() {
-    // Create file, spawn ctail -F, truncate file, write new content
+    // Create file, spawn lux -F, truncate file, write new content
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("app.log");
     {
@@ -774,14 +774,14 @@ fn follow_copytruncate() {
         f.flush().unwrap();
     }
 
-    let mut child = StdCommand::new(ctail_bin())
+    let mut child = StdCommand::new(lux_bin())
         .args(["-F", "--color", "never"])
         .arg(path.to_str().unwrap())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("failed to spawn ctail");
+        .expect("failed to spawn lux");
 
     // Wait for it to start and read initial content
     std::thread::sleep(Duration::from_millis(500));
@@ -811,7 +811,7 @@ fn follow_copytruncate() {
 
 #[test]
 fn filter_include_only_matching() {
-    let output = ctail()
+    let output = lux()
         .args(["--include", "ERROR", "--color", "never"])
         .write_stdin("ERROR: bad\nDEBUG: verbose\nWARN: caution\n")
         .output()
@@ -823,7 +823,7 @@ fn filter_include_only_matching() {
 
 #[test]
 fn filter_exclude_hides_matching() {
-    let output = ctail()
+    let output = lux()
         .args(["--exclude", "DEBUG", "--color", "never"])
         .write_stdin("ERROR: bad\nDEBUG: verbose\nWARN: caution\n")
         .output()
@@ -835,7 +835,7 @@ fn filter_exclude_hides_matching() {
 
 #[test]
 fn filter_include_exclude_combo() {
-    let output = ctail()
+    let output = lux()
         .args(["--include", "ERROR", "--exclude", "timeout", "--color", "never"])
         .write_stdin("ERROR timeout\nERROR disk\nDEBUG normal\n")
         .output()
@@ -847,7 +847,7 @@ fn filter_include_exclude_combo() {
 
 #[test]
 fn filter_multiple_include() {
-    let output = ctail()
+    let output = lux()
         .args(["--include", "ERROR", "--include", "WARN", "--color", "never"])
         .write_stdin("ERROR: bad\nDEBUG: verbose\nWARN: caution\nINFO: normal\n")
         .output()
@@ -860,7 +860,7 @@ fn filter_multiple_include() {
 #[test]
 fn filter_with_trigger() {
     // Excluded lines should not appear in trigger context
-    let output = ctail()
+    let output = lux()
         .args([
             "--trigger", "ERROR", "--exclude", "line1",
             "--before", "1", "--after", "0", "--color", "never",
@@ -883,7 +883,7 @@ fn filter_with_trigger() {
 
 #[test]
 fn filter_invalid_regex() {
-    ctail()
+    lux()
         .args(["--include", "(unclosed", "--color", "never"])
         .write_stdin("test\n")
         .assert()
@@ -896,16 +896,16 @@ fn filter_invalid_regex() {
 
 #[test]
 fn completions_bash() {
-    ctail()
+    lux()
         .args(["completions", "bash"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("ctail"));
+        .stdout(predicate::str::contains("lux"));
 }
 
 #[test]
 fn completions_zsh() {
-    ctail()
+    lux()
         .args(["completions", "zsh"])
         .assert()
         .success();
@@ -913,7 +913,7 @@ fn completions_zsh() {
 
 #[test]
 fn completions_fish() {
-    ctail()
+    lux()
         .args(["completions", "fish"])
         .assert()
         .success();
@@ -921,17 +921,17 @@ fn completions_fish() {
 
 #[test]
 fn version_output() {
-    ctail()
+    lux()
         .arg("--version")
         .assert()
         .success()
-        .stdout(predicate::str::contains("ctail"))
+        .stdout(predicate::str::contains("lux"))
         .stdout(predicate::str::is_match(r"\d+\.\d+\.\d+").unwrap());
 }
 
 #[test]
 fn version_short() {
-    ctail()
+    lux()
         .arg("-V")
         .assert()
         .success();
@@ -942,7 +942,7 @@ fn version_short() {
 
 #[test]
 fn force_color_in_pipe() {
-    let output = ctail()
+    let output = lux()
         .env("FORCE_COLOR", "1")
         .env_remove("NO_COLOR")
         .write_stdin("ERROR: test\n")
@@ -957,7 +957,7 @@ fn force_color_in_pipe() {
 
 #[test]
 fn force_color_overridden_by_no_color() {
-    let output = ctail()
+    let output = lux()
         .env("FORCE_COLOR", "1")
         .env("NO_COLOR", "1")
         .write_stdin("ERROR: test\n")
@@ -972,7 +972,7 @@ fn force_color_overridden_by_no_color() {
 
 #[test]
 fn force_color_overridden_by_color_never() {
-    let output = ctail()
+    let output = lux()
         .args(["--color", "never"])
         .env("FORCE_COLOR", "1")
         .write_stdin("ERROR: test\n")
@@ -988,7 +988,7 @@ fn force_color_overridden_by_color_never() {
 #[test]
 fn filter_strip_ansi_matching() {
     // Input with ANSI codes, --include should match through them with default strip-ansi
-    let output = ctail()
+    let output = lux()
         .args(["--include", "ERROR", "--color", "never"])
         .write_stdin("\x1b[31mERROR\x1b[0m: bad\n\x1b[33mWARN\x1b[0m: ok\n")
         .output()
@@ -1006,19 +1006,19 @@ fn filter_strip_ansi_matching() {
 
 #[test]
 fn syntect_highlights_markdown_file() {
-    // ctail with a .md file should get syntect highlighting (ANSI codes)
+    // lux with a .md file should get syntect highlighting (ANSI codes)
     let dir = TempDir::new().unwrap();
     let md_path = dir.path().join("test.md");
     std::fs::write(&md_path, "# Hello\n\nSome **bold** text\n").unwrap();
 
-    let output = StdCommand::new(ctail_bin())
+    let output = StdCommand::new(lux_bin())
         .args(["--color", "always"])
         .arg(md_path.to_str().unwrap())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
-        .expect("failed to run ctail");
+        .expect("failed to run lux");
 
     assert!(output.status.success(), "Expected exit 0, got: {:?}", output.status);
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -1036,14 +1036,14 @@ fn explicit_profile_overrides_extension_auto_select() {
     let md_path = dir.path().join("test.md");
     std::fs::write(&md_path, "# Test\n").unwrap();
 
-    let output = StdCommand::new(ctail_bin())
+    let output = StdCommand::new(lux_bin())
         .args(["--profile", "nonexistent"])
         .arg(md_path.to_str().unwrap())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
-        .expect("failed to run ctail");
+        .expect("failed to run lux");
 
     assert!(!output.status.success(), "Expected failure exit code");
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1056,7 +1056,7 @@ fn explicit_profile_overrides_extension_auto_select() {
 #[test]
 fn list_profiles_shows_logs_builtin() {
     let tmp = TempDir::new().unwrap();
-    ctail()
+    lux()
         .args(["--list-profiles"])
         .env("XDG_CONFIG_HOME", tmp.path().to_str().unwrap())
         .env_remove("HOME")
@@ -1068,19 +1068,19 @@ fn list_profiles_shows_logs_builtin() {
 
 #[test]
 fn syntect_highlights_sh_file() {
-    // ctail with a .sh file should get syntect highlighting (ANSI codes)
+    // lux with a .sh file should get syntect highlighting (ANSI codes)
     let dir = TempDir::new().unwrap();
     let sh_path = dir.path().join("test.sh");
     std::fs::write(&sh_path, "#!/bin/bash\n# comment\necho $HOME\n").unwrap();
 
-    let output = StdCommand::new(ctail_bin())
+    let output = StdCommand::new(lux_bin())
         .args(["--color", "always"])
         .arg(sh_path.to_str().unwrap())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
-        .expect("failed to run ctail");
+        .expect("failed to run lux");
 
     assert!(output.status.success(), "Expected exit 0, got: {:?}", output.status);
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -1092,19 +1092,19 @@ fn syntect_highlights_sh_file() {
 
 #[test]
 fn syntect_highlights_rust_file() {
-    // ctail with a .rs file should get syntect highlighting
+    // lux with a .rs file should get syntect highlighting
     let dir = TempDir::new().unwrap();
     let rs_path = dir.path().join("test.rs");
     std::fs::write(&rs_path, "fn main() {\n    let x = 42;\n    println!(\"hello\");\n}\n").unwrap();
 
-    let output = StdCommand::new(ctail_bin())
+    let output = StdCommand::new(lux_bin())
         .args(["--color", "always"])
         .arg(rs_path.to_str().unwrap())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
-        .expect("failed to run ctail");
+        .expect("failed to run lux");
 
     assert!(output.status.success(), "Expected exit 0, got: {:?}", output.status);
     let stdout = String::from_utf8_lossy(&output.stdout);

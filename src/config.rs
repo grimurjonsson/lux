@@ -64,11 +64,11 @@ pub fn default_config_path() -> Option<PathBuf> {
     if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME")
         && !xdg.is_empty()
     {
-        return Some(PathBuf::from(xdg).join("ctail").join("config.toml"));
+        return Some(PathBuf::from(xdg).join("lux").join("config.toml"));
     }
     std::env::var("HOME")
         .ok()
-        .map(|home| PathBuf::from(home).join(".config").join("ctail").join("config.toml"))
+        .map(|home| PathBuf::from(home).join(".config").join("lux").join("config.toml"))
 }
 
 /// Load config from an explicit path or the default XDG location.
@@ -158,7 +158,7 @@ pub fn set_default_profile(explicit_path: Option<&Path>, name: Option<&str>) -> 
     Ok(())
 }
 
-/// Return built-in profiles that ship with ctail.
+/// Return built-in profiles that ship with lux.
 ///
 /// Only "logs" remains as a built-in. Syntect handles syntax highlighting
 /// for source code files (markdown, yaml, toml, shell, etc.).
@@ -302,14 +302,14 @@ pub fn print_profiles_to(
                 writeln!(out)?;
                 writeln!(
                     out,
-                    "{} ctail --profile {} {}",
+                    "{} lux --profile {} {}",
                     "Usage:".dimmed(),
                     "<name>".cyan(),
                     "<file>".dimmed(),
                 )?;
                 writeln!(
                     out,
-                    "       command | ctail --profile {}",
+                    "       command | lux --profile {}",
                     "<name>".cyan(),
                 )?;
             }
@@ -346,14 +346,14 @@ pub fn print_profiles_to(
                 }
                 writeln!(
                     out,
-                    "{} ctail --profile {} {}",
+                    "{} lux --profile {} {}",
                     "Usage:".dimmed(),
                     "<name>".cyan(),
                     "<file>".dimmed(),
                 )?;
                 writeln!(
                     out,
-                    "       command | ctail --profile {}",
+                    "       command | lux --profile {}",
                     "<name>".cyan(),
                 )?;
             }
@@ -521,7 +521,7 @@ mod tests {
     #[test]
     fn load_config_none_with_file() {
         let tmp = TempDir::new().unwrap();
-        let config_dir = tmp.path().join("ctail");
+        let config_dir = tmp.path().join("lux");
         std::fs::create_dir_all(&config_dir).unwrap();
         let config_path = config_dir.join("config.toml");
         std::fs::write(&config_path, "[[rules]]\npattern = \"ERROR\"\nstyle = \"red\"\n").unwrap();
@@ -651,7 +651,7 @@ style = "blue"
         unsafe { set_env("XDG_CONFIG_HOME", "/custom/xdg") };
 
         let path = default_config_path().unwrap();
-        assert_eq!(path, PathBuf::from("/custom/xdg/ctail/config.toml"));
+        assert_eq!(path, PathBuf::from("/custom/xdg/lux/config.toml"));
 
         unsafe { restore_env("XDG_CONFIG_HOME", prev) };
     }
@@ -927,7 +927,7 @@ lines = "+1"
         unsafe { set_env("HOME", "/test/home") };
 
         let path = default_config_path().unwrap();
-        assert_eq!(path, PathBuf::from("/test/home/.config/ctail/config.toml"));
+        assert_eq!(path, PathBuf::from("/test/home/.config/lux/config.toml"));
 
         unsafe { restore_env("XDG_CONFIG_HOME", prev_xdg) };
         unsafe { restore_env("HOME", prev_home) };
