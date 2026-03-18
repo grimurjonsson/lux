@@ -9,4 +9,5 @@ pub mod rules;
 pub mod syntax;
 pub mod tail;
 pub mod trigger;
+pub mod update;
 pub mod wizard;
