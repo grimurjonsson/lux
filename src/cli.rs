@@ -107,6 +107,8 @@ pub enum Command {
         #[command(subcommand)]
         action: ProfileAction,
     },
+    /// Check for updates and upgrade interactively
+    Update,
 }
 
 #[derive(Subcommand)]
@@ -407,5 +409,11 @@ mod tests {
     fn test_no_subcommand_by_default() {
         let cli = Cli::try_parse_from(["lux"]).unwrap();
         assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn test_update_subcommand() {
+        let cli = Cli::try_parse_from(["lux", "update"]).unwrap();
+        assert!(matches!(cli.command, Some(Command::Update)));
     }
 }

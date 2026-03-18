@@ -186,7 +186,6 @@ build-release-binaries:
         "aarch64-unknown-linux-gnu"
         "x86_64-apple-darwin"
         "aarch64-apple-darwin"
-        "x86_64-pc-windows-gnu"
     )
 
     echo "Ensuring all targets are installed..."
@@ -202,17 +201,12 @@ build-release-binaries:
 
         if [[ "$target" == *"apple-darwin"* ]]; then
             cargo build --release --target "$target"
-            binary_ext=""
-        elif [[ "$target" == *"windows"* ]]; then
-            cross build --release --target "$target"
-            binary_ext=".exe"
         else
             cross build --release --target "$target"
-            binary_ext=""
         fi
 
-        cp "target/$target/release/lux${binary_ext}" "release-binaries/lux-$target${binary_ext}"
-        echo "✓ Built: release-binaries/lux-$target${binary_ext}"
+        cp "target/$target/release/lux" "release-binaries/lux-$target"
+        echo "✓ Built: release-binaries/lux-$target"
         echo ""
     done
 

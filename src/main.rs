@@ -1,5 +1,6 @@
 use std::io::{self, BufRead, BufWriter, Write};
 use std::path::Path;
+use std::thread;
 
 use anyhow::Context;
 use clap::{CommandFactory, Parser};
@@ -26,6 +27,10 @@ fn run() -> anyhow::Result<()> {
             Command::Completions { shell } => {
                 let mut cmd = Cli::command();
                 generate(*shell, &mut cmd, "lux", &mut std::io::stdout());
+                std::process::exit(0);
+            }
+            Command::Update => {
+                lux::update::run_update_command();
                 std::process::exit(0);
             }
             Command::Profile { action } => {
@@ -108,6 +113,21 @@ fn run() -> anyhow::Result<()> {
 
     // Load config file
     let config = config::load_config(cli.config.as_deref().map(Path::new))?;
+
+    // Spawn background update check thread (non-blocking)
+    let update_interval = config
+        .as_ref()
+        .map(|(c, _)| c.update_check_interval_days)
+        .unwrap_or(7);
+    let update_mode_for_thread = config
+        .as_ref()
+        .and_then(|(c, _)| c.update_mode.clone());
+    let update_handle = thread::spawn(move || {
+        lux::update::background_check(
+            update_interval,
+            update_mode_for_thread.as_deref(),
+        )
+    });
 
     // Build merged profiles: built-in first, user profiles override
     let mut merged_profiles = config::builtin_profiles();
@@ -315,6 +335,18 @@ fn run() -> anyhow::Result<()> {
                 }
                 let output = engine.apply(&line);
                 writeln!(writer, "{output}")?;
+            }
+        }
+    }
+
+    // Check if background update thread finished (never block)
+    if update_handle.is_finished() {
+        if let Ok(result) = update_handle.join() {
+            if let Some(ref new_version) = result.new_version {
+                let update_mode = config
+                    .as_ref()
+                    .and_then(|(c, _)| c.update_mode.as_deref());
+                lux::update::handle_update_result(new_version, update_mode);
             }
         }
     }
