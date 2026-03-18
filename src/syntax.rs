@@ -31,8 +31,8 @@ const DEFAULT_THEME: &str = "Catppuccin Mocha";
 
 /// Built-in filename → syntax mappings for files not covered by syntect/two-face.
 const BUILTIN_SYNTAX_MAP: &[(&str, &str)] = &[
-    ("justfile", "Makefile"),
-    ("Justfile", "Makefile"),
+    ("justfile", "Bourne Again Shell (bash)"),
+    ("Justfile", "Bourne Again Shell (bash)"),
     ("Vagrantfile", "Ruby"),
     ("Gemfile", "Ruby"),
     ("Rakefile", "Ruby"),
@@ -263,7 +263,7 @@ mod tests {
     #[test]
     fn for_file_justfile_builtin_mapping() {
         let h = SyntaxHighlighter::for_file(Path::new("justfile"), None, None);
-        assert!(h.is_some(), "justfile should map to Makefile syntax via built-in map");
+        assert!(h.is_some(), "justfile should map to bash syntax via built-in map");
     }
 
     #[test]
