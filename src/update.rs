@@ -141,6 +141,60 @@ fn days_since(date: &str) -> i64 {
     y * 365 + m * 30 + d // approximate, only used for >= comparison
 }
 
+/// Result of a background update check.
+pub struct CheckResult {
+    pub new_version: Option<String>,
+}
+
+/// Run the background update check. Called from a spawned thread.
+///
+/// - Reads state file and config interval
+/// - Skips if disabled or interval not elapsed
+/// - Fetches latest version from GitHub if needed
+/// - Updates state file
+/// - Returns whether a newer version was found
+pub fn background_check(interval_days: u32, update_mode: Option<&str>) -> CheckResult {
+    // Disabled via config
+    if update_mode == Some("disabled") || interval_days == 0 {
+        return CheckResult { new_version: None };
+    }
+
+    let mut state = load_state();
+    let current = current_version();
+
+    // Check if we need to hit the API or can use cached value
+    let latest = if check_interval_elapsed(&state, interval_days) {
+        // Interval elapsed — fetch fresh
+        if let Some(version) = fetch_latest_version() {
+            state.last_checked = Some(now_iso8601());
+            state.latest_version = Some(version.clone());
+            save_state(&state);
+            version
+        } else {
+            // Fetch failed — use cached if available
+            match state.latest_version {
+                Some(ref v) => v.clone(),
+                None => return CheckResult { new_version: None },
+            }
+        }
+    } else {
+        // Interval not elapsed — use cached
+        match state.latest_version {
+            Some(ref v) => v.clone(),
+            None => return CheckResult { new_version: None },
+        }
+    };
+
+    // Compare
+    if is_newer(&latest, current) && !state.skipped_versions.contains(&latest) {
+        CheckResult {
+            new_version: Some(latest),
+        }
+    } else {
+        CheckResult { new_version: None }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
