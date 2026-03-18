@@ -58,10 +58,14 @@ pub fn is_newer(remote: &str, local: &str) -> bool {
         if parts.len() != 3 {
             return None;
         }
+        // Strip pre-release suffix (e.g. "1-dev-20260318-224926" → "1")
+        let strip_pre = |p: &str| -> Option<u32> {
+            p.split('-').next()?.parse().ok()
+        };
         Some((
-            parts[0].parse().ok()?,
-            parts[1].parse().ok()?,
-            parts[2].parse().ok()?,
+            strip_pre(parts[0])?,
+            strip_pre(parts[1])?,
+            strip_pre(parts[2])?,
         ))
     };
     match (parse(remote), parse(local)) {
@@ -225,7 +229,6 @@ fn stderr_is_tty() -> bool {
 #[derive(Debug, PartialEq)]
 pub enum UpdateAction {
     UpdateNow,
-    SetNotify,
     SetAuto,
     SkipVersion,
     Disable,
@@ -239,7 +242,7 @@ pub fn show_update_prompt(new_version: &str) -> UpdateAction {
     eprintln!("lux v{new_version} is available (you have v{current})");
     eprintln!();
     eprintln!("  1) Update now");
-    eprintln!("  2) Always notify me (don't ask again)");
+    eprintln!("  2) Not now");
     eprintln!("  3) Always auto-update (don't ask again)");
     eprintln!("  4) Skip this version");
     eprintln!("  5) Disable update checks");
@@ -255,7 +258,7 @@ pub fn show_update_prompt(new_version: &str) -> UpdateAction {
 
     match input.trim() {
         "1" => UpdateAction::UpdateNow,
-        "2" => UpdateAction::SetNotify,
+        "2" => UpdateAction::Notify,
         "3" => UpdateAction::SetAuto,
         "4" => UpdateAction::SkipVersion,
         "5" => UpdateAction::Disable,
@@ -289,13 +292,6 @@ fn execute_action(action: UpdateAction, new_version: &str) {
     match action {
         UpdateAction::UpdateNow => {
             perform_update(new_version);
-        }
-        UpdateAction::SetNotify => {
-            if let Err(e) = config::set_config_field("update_mode", Some("notify")) {
-                eprintln!("lux: failed to save preference: {e}");
-            } else {
-                eprintln!("Preference saved. Future updates will show a notification.");
-            }
         }
         UpdateAction::SetAuto => {
             if let Err(e) = config::set_config_field("update_mode", Some("auto")) {
@@ -348,6 +344,25 @@ fn detect_target() -> Option<String> {
     Some(format!("{arch}-{platform}"))
 }
 
+/// Find the installed lux binary via PATH (e.g. ~/.local/bin/lux).
+/// Falls back to current_exe() if not found in PATH.
+fn which_lux() -> Option<std::path::PathBuf> {
+    std::process::Command::new("which")
+        .arg("lux")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| {
+            let path = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if path.is_empty() {
+                None
+            } else {
+                Some(std::path::PathBuf::from(path))
+            }
+        })
+        .or_else(|| std::env::current_exe().ok())
+}
+
 /// Download and replace the current binary with the new version.
 pub fn perform_update(new_version: &str) {
     let Some(target) = detect_target() else {
@@ -355,10 +370,11 @@ pub fn perform_update(new_version: &str) {
         return;
     };
 
-    let current_exe = match std::env::current_exe() {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("lux: could not determine binary path: {e}");
+    // Find the installed binary via PATH (not current_exe, which may be target/debug/lux)
+    let current_exe = match which_lux() {
+        Some(p) => p,
+        None => {
+            eprintln!("lux: could not find 'lux' in PATH");
             return;
         }
     };
@@ -375,7 +391,7 @@ pub fn perform_update(new_version: &str) {
     let _ = std::fs::create_dir_all(&tmp_dir);
 
     let download = std::process::Command::new("curl")
-        .args(["-L", "-f", "--connect-timeout", "10", "--max-time", "120", "-o", &tmp_archive, &url])
+        .args(["-L", "-f", "-s", "--connect-timeout", "10", "--max-time", "120", "-o", &tmp_archive, &url])
         .status();
 
     match download {
@@ -480,6 +496,13 @@ mod tests {
     fn strips_v_prefix() {
         assert!(is_newer("v0.2.0", "0.1.0"));
         assert!(is_newer("0.2.0", "v0.1.0"));
+    }
+
+    #[test]
+    fn dev_version_compares_base() {
+        assert!(is_newer("0.1.3", "0.1.1-dev-20260318-224926"));
+        assert!(is_newer("0.2.0", "0.1.1-dev-20260318-224926"));
+        assert!(!is_newer("0.1.1", "0.1.1-dev-20260318-224926"));
     }
 
     #[test]
