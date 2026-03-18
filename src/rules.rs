@@ -448,6 +448,8 @@ mod tests {
             default_profile: None,
             theme: None,
             syntax_map: HashMap::new(),
+            update_check_interval_days: 7,
+            update_mode: None,
         };
         let cli = vec!["ERROR:red".to_string()];
         let rules = build_rules_with_config(&cli, Some(&config), None, None).unwrap();
@@ -478,6 +480,8 @@ mod tests {
             default_profile: None,
             theme: None,
             syntax_map: HashMap::new(),
+            update_check_interval_days: 7,
+            update_mode: None,
         };
         let rules = build_rules_with_config(&[], Some(&config), Some("django"), None).unwrap();
         // 1 global + 1 profile + 5 defaults = 7
@@ -493,6 +497,8 @@ mod tests {
             default_profile: None,
             theme: None,
             syntax_map: HashMap::new(),
+            update_check_interval_days: 7,
+            update_mode: None,
             profiles: {
                 let mut p = HashMap::new();
                 p.insert(

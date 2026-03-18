@@ -28,6 +28,10 @@ fn run() -> anyhow::Result<()> {
                 generate(*shell, &mut cmd, "lux", &mut std::io::stdout());
                 std::process::exit(0);
             }
+            Command::Update => {
+                eprintln!("Update check not yet implemented");
+                std::process::exit(0);
+            }
             Command::Profile { action } => {
                 match action {
                     ProfileAction::New { config } => {

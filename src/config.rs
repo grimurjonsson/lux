@@ -19,6 +19,10 @@ fn default_scope() -> String {
     "line".to_string()
 }
 
+fn default_update_interval() -> u32 {
+    7
+}
+
 /// A named profile containing its own set of rules and optional trigger settings.
 #[derive(Deserialize, Debug, Clone)]
 pub struct ProfileConfig {
@@ -54,6 +58,12 @@ pub struct Config {
     /// e.g. { "justfile" = "Makefile", "tf" = "HCL" }
     #[serde(default)]
     pub syntax_map: HashMap<String, String>,
+    /// Days between automatic update checks (default: 7, set to 0 to disable)
+    #[serde(default = "default_update_interval")]
+    pub update_check_interval_days: u32,
+    /// Update behavior: "notify", "auto", or "disabled". None = first-time prompt.
+    #[serde(default)]
+    pub update_mode: Option<String>,
 }
 
 /// Return the default config file path using XDG_CONFIG_HOME or $HOME/.config.
@@ -872,6 +882,8 @@ lines = "+1"
             default_profile: None,
             theme: None,
             syntax_map: HashMap::new(),
+            update_check_interval_days: 7,
+            update_mode: None,
             profiles: {
                 let mut p = HashMap::new();
                 p.insert(
