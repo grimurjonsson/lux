@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::config;
@@ -71,6 +72,73 @@ pub fn is_newer(remote: &str, local: &str) -> bool {
 /// The compiled-in version of this binary.
 pub fn current_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
+}
+
+const GITHUB_API_URL: &str =
+    "https://api.github.com/repos/grimurjonsson/lux/releases/latest";
+
+/// Check if enough days have elapsed since last_checked.
+pub fn check_interval_elapsed(state: &UpdateState, interval_days: u32) -> bool {
+    if interval_days == 0 {
+        return false;
+    }
+    let Some(ref last) = state.last_checked else {
+        return true; // never checked
+    };
+    // Parse ISO 8601 date portion (YYYY-MM-DD) and compare to today
+    let last_date = &last[..10]; // "2026-03-18"
+    let today = now_iso8601();
+    let today_date = &today[..10];
+    // Simple day-difference: parse as days-since-epoch and compare
+    days_since(today_date).saturating_sub(days_since(last_date)) >= interval_days as i64
+}
+
+/// Fetch the latest release version from GitHub via curl.
+/// Returns None on any error (network, parse, timeout).
+pub fn fetch_latest_version() -> Option<String> {
+    let output = std::process::Command::new("curl")
+        .args([
+            "--connect-timeout", "5",
+            "--max-time", "10",
+            "-s",
+            GITHUB_API_URL,
+        ])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let body = String::from_utf8_lossy(&output.stdout);
+    let re = Regex::new(r#""tag_name"\s*:\s*"v?([^"]+)""#).ok()?;
+    let caps = re.captures(&body)?;
+    Some(caps[1].to_string())
+}
+
+/// Return current UTC time as ISO 8601 string (e.g. "2026-03-18T14:30:00Z").
+/// Uses `date -u +%Y-%m-%dT%H:%M:%SZ` to avoid adding a time crate.
+pub fn now_iso8601() -> String {
+    std::process::Command::new("date")
+        .args(["-u", "+%Y-%m-%dT%H:%M:%SZ"])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| "1970-01-01T00:00:00Z".to_string())
+}
+
+/// Rough days-since-epoch from a "YYYY-MM-DD" string.
+/// Only needs to be accurate enough for interval comparison.
+fn days_since(date: &str) -> i64 {
+    let parts: Vec<&str> = date.split('-').collect();
+    if parts.len() != 3 {
+        return 0;
+    }
+    let y: i64 = parts[0].parse().unwrap_or(0);
+    let m: i64 = parts[1].parse().unwrap_or(0);
+    let d: i64 = parts[2].parse().unwrap_or(0);
+    y * 365 + m * 30 + d // approximate, only used for >= comparison
 }
 
 #[cfg(test)]
@@ -148,5 +216,35 @@ mod tests {
     fn current_version_is_valid() {
         let v = current_version();
         assert!(v.split('.').count() == 3, "version should be X.Y.Z, got {v}");
+    }
+
+    #[test]
+    fn interval_elapsed_never_checked() {
+        let state = UpdateState::default();
+        assert!(check_interval_elapsed(&state, 7));
+    }
+
+    #[test]
+    fn interval_not_elapsed_recent() {
+        let state = UpdateState {
+            last_checked: Some(now_iso8601()),
+            ..Default::default()
+        };
+        assert!(!check_interval_elapsed(&state, 7));
+    }
+
+    #[test]
+    fn interval_disabled_zero() {
+        let state = UpdateState::default();
+        assert!(!check_interval_elapsed(&state, 0));
+    }
+
+    #[test]
+    fn interval_elapsed_old_date() {
+        let state = UpdateState {
+            last_checked: Some("2020-01-01T00:00:00Z".to_string()),
+            ..Default::default()
+        };
+        assert!(check_interval_elapsed(&state, 7));
     }
 }
