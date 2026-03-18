@@ -6,6 +6,7 @@ pub mod filter;
 pub mod follow;
 pub mod output;
 pub mod rules;
+pub mod syntax;
 pub mod tail;
 pub mod trigger;
 pub mod wizard;

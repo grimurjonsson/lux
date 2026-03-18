@@ -15,18 +15,21 @@ struct Span {
 ///
 /// Each rule produces styled spans based on its scope (line/match/capture).
 /// When multiple rules match, overlapping regions resolve by priority
-/// (lowest number wins).
+/// (lowest number wins). An optional syntect-based syntax highlighter provides
+/// a base layer underneath all rules (priority `usize::MAX`).
 pub struct Engine {
     rules: Vec<Rule>,
     color_enabled: bool,
+    syntax: Option<crate::syntax::SyntaxHighlighter>,
 }
 
 impl Engine {
-    /// Create a new engine with the given rules and color mode.
-    pub fn new(rules: Vec<Rule>, color_enabled: bool) -> Self {
+    /// Create a new engine with the given rules, color mode, and optional syntax highlighter.
+    pub fn new(rules: Vec<Rule>, color_enabled: bool, syntax: Option<crate::syntax::SyntaxHighlighter>) -> Self {
         Self {
             rules,
             color_enabled,
+            syntax,
         }
     }
 
@@ -38,8 +41,14 @@ impl Engine {
     /// - `Capture(n)`: colors only capture group `n`
     ///
     /// When spans overlap, the one with the lowest priority number wins.
+    /// Syntect base-layer spans have `usize::MAX` priority (lowest — only fills
+    /// bytes that no rule claimed).
     pub fn apply(&self, line: &str) -> String {
-        if !self.color_enabled || self.rules.is_empty() || line.is_empty() {
+        let has_syntax = self.syntax.is_some();
+        if !self.color_enabled || line.is_empty() {
+            return line.to_string();
+        }
+        if self.rules.is_empty() && !has_syntax {
             return line.to_string();
         }
 
@@ -48,6 +57,17 @@ impl Engine {
         for rule in &self.rules {
             if let Some(span) = self.rule_span(rule, line) {
                 spans.push(span);
+            }
+        }
+
+        // Add syntect base-layer spans (lowest priority)
+        if let Some(ref sh) = self.syntax {
+            for (range, style) in sh.highlight_line(line) {
+                spans.push(Span {
+                    range,
+                    style,
+                    priority: usize::MAX,
+                });
             }
         }
 
@@ -184,7 +204,7 @@ mod tests {
     #[test]
     fn test_single_rule_match() {
         let rules = vec![parse_rule("ERROR", "red", 0)];
-        let engine = Engine::new(rules, true);
+        let engine = Engine::new(rules, true, None);
         let result = engine.apply("ERROR: something broke");
         // Should be styled (not equal to plain text)
         assert_ne!(result, "ERROR: something broke");
@@ -193,14 +213,14 @@ mod tests {
     #[test]
     fn test_no_match_passthrough() {
         let rules = vec![parse_rule("ERROR", "red", 0)];
-        let engine = Engine::new(rules, true);
+        let engine = Engine::new(rules, true, None);
         let result = engine.apply("just a normal line");
         assert_eq!(result, "just a normal line");
     }
 
     #[test]
     fn test_no_rules_passthrough() {
-        let engine = Engine::new(vec![], true);
+        let engine = Engine::new(vec![], true, None);
         let result = engine.apply("anything here");
         assert_eq!(result, "anything here");
     }
@@ -208,7 +228,7 @@ mod tests {
     #[test]
     fn test_color_disabled_passthrough() {
         let rules = vec![parse_rule("ERROR", "red", 0)];
-        let engine = Engine::new(rules, false);
+        let engine = Engine::new(rules, false, None);
         let result = engine.apply("ERROR: something");
         assert_eq!(result, "ERROR: something");
     }
@@ -216,7 +236,7 @@ mod tests {
     #[test]
     fn test_default_rules_error_case_insensitive() {
         let rules = build_rules(&[]).unwrap();
-        let engine = Engine::new(rules, true);
+        let engine = Engine::new(rules, true, None);
         let result = engine.apply("error happened");
         assert_ne!(result, "error happened");
     }
@@ -224,7 +244,7 @@ mod tests {
     #[test]
     fn test_default_rules_warn() {
         let rules = build_rules(&[]).unwrap();
-        let engine = Engine::new(rules, true);
+        let engine = Engine::new(rules, true, None);
         let result = engine.apply("WARNING: disk full");
         assert_ne!(result, "WARNING: disk full");
     }
@@ -232,7 +252,7 @@ mod tests {
     #[test]
     fn test_default_rules_debug() {
         let rules = build_rules(&[]).unwrap();
-        let engine = Engine::new(rules, true);
+        let engine = Engine::new(rules, true, None);
         let result = engine.apply("DEBUG: entering fn");
         assert_ne!(result, "DEBUG: entering fn");
     }
@@ -243,7 +263,7 @@ mod tests {
     fn test_match_scope_colors_only_matched_text() {
         // Match-scope: only "ERROR" should be red, rest plain
         let rules = vec![Rule::test_with_scope("ERROR", "red", MatchScope::Match, 0)];
-        let engine = Engine::new(rules, true);
+        let engine = Engine::new(rules, true, None);
         let result = engine.apply("2024 ERROR: fail");
 
         // The plain text portions should appear unchanged
@@ -273,7 +293,7 @@ mod tests {
             MatchScope::Capture(1),
             0,
         )];
-        let engine = Engine::new(rules, true);
+        let engine = Engine::new(rules, true, None);
         let result = engine.apply("user=42 action=login");
 
         // "user=" should be plain, " action=login" should be plain
@@ -292,7 +312,7 @@ mod tests {
     fn test_line_scope_colors_entire_line() {
         // Line-scope regression check: entire line should be colored
         let rules = vec![Rule::test_with_scope("ERROR", "red", MatchScope::Line, 0)];
-        let engine = Engine::new(rules, true);
+        let engine = Engine::new(rules, true, None);
         let result = engine.apply("ERROR: fail");
 
         let expected = "ERROR: fail"
@@ -308,7 +328,7 @@ mod tests {
             Rule::test_with_scope(r"\d{4}", "blue", MatchScope::Match, 0),
             Rule::test_with_scope("ERROR", "red", MatchScope::Line, 1),
         ];
-        let engine = Engine::new(rules, true);
+        let engine = Engine::new(rules, true, None);
         let result = engine.apply("2024 ERROR: fail");
 
         // Should not be plain
@@ -332,13 +352,13 @@ mod tests {
             Rule::test_with_scope("ERROR", "blue", MatchScope::Match, 0),
             Rule::test_with_scope("ERROR", "red", MatchScope::Match, 1),
         ];
-        let engine = Engine::new(rules, true);
+        let engine = Engine::new(rules, true, None);
         let result = engine.apply("ERROR: test");
 
         // Build what blue-only match scope would produce
         let blue_only = {
             let r = vec![Rule::test_with_scope("ERROR", "blue", MatchScope::Match, 0)];
-            Engine::new(r, true).apply("ERROR: test")
+            Engine::new(r, true, None).apply("ERROR: test")
         };
         assert_eq!(result, blue_only, "lower priority number should win");
     }
@@ -352,7 +372,7 @@ mod tests {
             MatchScope::Capture(2),
             0,
         )];
-        let engine = Engine::new(rules, true);
+        let engine = Engine::new(rules, true, None);
         let result = engine.apply("foo bar");
         // Missing capture group -> no coloring, returned unchanged
         assert_eq!(result, "foo bar");
@@ -360,7 +380,7 @@ mod tests {
 
     #[test]
     fn test_empty_rules_passthrough() {
-        let engine = Engine::new(vec![], true);
+        let engine = Engine::new(vec![], true, None);
         let result = engine.apply("some line");
         assert_eq!(result, "some line");
     }
@@ -368,7 +388,7 @@ mod tests {
     #[test]
     fn test_color_disabled_returns_unchanged() {
         let rules = vec![Rule::test_with_scope("ERROR", "red", MatchScope::Match, 0)];
-        let engine = Engine::new(rules, false);
+        let engine = Engine::new(rules, false, None);
         let result = engine.apply("ERROR: test");
         assert_eq!(result, "ERROR: test");
     }

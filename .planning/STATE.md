@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Completed 04-02-PLAN.md (shell completions, version, FORCE_COLOR) -- ALL PLANS COMPLETE
-last_updated: "2026-03-13T12:31:11.789Z"
-last_activity: 2026-03-13 -- Plan 04-02 complete (shell completions, --version, FORCE_COLOR)
+stopped_at: Completed quick-260318-ky5 (built-in help profile)
+last_updated: "2026-03-18T15:09:59Z"
+last_activity: "2026-03-18 - Completed quick task 260318-ky5: add built-in help profile for CLI help text coloring"
 progress:
   total_phases: 4
   completed_phases: 4
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-03-12)
 Phase: 4 of 4 (CLI Polish, Filtering & UX Enhancements)
 Plan: 2 of 2 in current phase
 Status: Plan 04-02 complete -- shell completions, version flag, FORCE_COLOR
-Last activity: 2026-03-13 -- Plan 04-02 complete (shell completions, --version, FORCE_COLOR)
+Last activity: 2026-03-18 - Completed quick task 260318-ky5: add built-in help profile for CLI help text coloring
 
 Progress: [██████████] 100%
 
@@ -101,6 +101,9 @@ Recent decisions affecting current work:
 - [Phase 04]: pub(crate) strip_ansi in trigger.rs rather than extracting to separate module
 - [Phase 04]: FORCE_COLOR check after NO_COLOR and before is_terminal in detect_color_mode
 - [Phase 04]: Completions subcommand uses clap_complete::generate for standard shell output
+- [Phase quick]: LazyLock statics for SyntaxSet/ThemeSet avoid repeated expensive loading
+- [Phase quick]: Syntect spans at usize::MAX priority so rule spans always win
+- [Phase quick]: Removed markdown/yaml/toml/shell built-in profiles; syntect covers them
 
 ### Roadmap Evolution
 
@@ -122,9 +125,12 @@ None yet.
 | 2 | Interactive style rule wizard with color preview | 2026-03-13 | f71c1f4 | [2-interactive-style-rule-wizard-with-color](./quick/2-interactive-style-rule-wizard-with-color/) |
 | 3 | Add cyan separator line between trigger groups | 2026-03-13 | bbc2963 | [3-add-cyan-separator-line-between-trigger-](./quick/3-add-cyan-separator-line-between-trigger-/) |
 | 4 | Add markdown profile with color coding and auto-select | 2026-03-17 | 5d24a3f | [260317-jhb-add-markdown-profile-with-color-coding-a](./quick/260317-jhb-add-markdown-profile-with-color-coding-a/) |
+| 5 | Add shell profile with filename-based auto-selection | 2026-03-18 | d8681cb | [260318-jgt-add-a-default-profiles-to-use-when-viewi](./quick/260318-jgt-add-a-default-profiles-to-use-when-viewi/) |
+| 6 | Add syntect syntax highlighting with theme config | 2026-03-18 | 57480c2 | [260318-jvh-add-syntect-syntax-highlighting-with-the](./quick/260318-jvh-add-syntect-syntax-highlighting-with-the/) |
+| 7 | Add built-in help profile for CLI help text coloring | 2026-03-18 | 70abadf | [260318-ky5-i-want-to-be-able-to-pipe-the-ctail-help](./quick/260318-ky5-i-want-to-be-able-to-pipe-the-ctail-help/) |
 
 ## Session Continuity
 
-Last session: 2026-03-17T14:09:00.000Z
-Stopped at: Completed quick-260317-jhb (markdown profile with extension auto-selection)
+Last session: 2026-03-18T15:09:59Z
+Stopped at: Completed quick-260318-ky5 (built-in help profile)
 Resume file: None

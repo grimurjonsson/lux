@@ -313,7 +313,7 @@ fn list_profiles_no_config() {
         .env_remove("HOME")
         .assert()
         .success()
-        .stdout(predicate::str::contains("markdown"))
+        .stdout(predicate::str::contains("logs"))
         .stdout(predicate::str::contains("built-in"));
 }
 
@@ -366,7 +366,7 @@ style = "red"
         .args(["--list-profiles", "--config", config_path.to_str().unwrap()])
         .assert()
         .success()
-        .stdout(predicate::str::contains("markdown"))
+        .stdout(predicate::str::contains("logs"))
         .stdout(predicate::str::contains("built-in"));
 }
 
@@ -1002,11 +1002,11 @@ fn filter_strip_ansi_matching() {
     );
 }
 
-// === Markdown profile and extension auto-selection tests ===
+// === Syntect highlighting and profile auto-selection tests ===
 
 #[test]
-fn markdown_auto_select_colors_headings() {
-    // ctail with a .md file should auto-select markdown profile and apply color
+fn syntect_highlights_markdown_file() {
+    // ctail with a .md file should get syntect highlighting (ANSI codes)
     let dir = TempDir::new().unwrap();
     let md_path = dir.path().join("test.md");
     std::fs::write(&md_path, "# Hello\n\nSome **bold** text\n").unwrap();
@@ -1024,34 +1024,8 @@ fn markdown_auto_select_colors_headings() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         has_ansi_codes(&stdout),
-        "Expected ANSI codes for markdown headings: {stdout:?}"
+        "Expected ANSI codes from syntect for markdown: {stdout:?}"
     );
-}
-
-#[test]
-fn markdown_auto_select_shows_full_file() {
-    // ctail with a .md file shows full file (not just last 10 lines)
-    let dir = TempDir::new().unwrap();
-    let md_path = dir.path().join("test.md");
-    let content: String = (1..=25).map(|i| format!("Line {i}\n")).collect();
-    std::fs::write(&md_path, &content).unwrap();
-
-    let output = StdCommand::new(ctail_bin())
-        .args(["--color", "never"])
-        .arg(md_path.to_str().unwrap())
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .expect("failed to run ctail");
-
-    assert!(output.status.success(), "Expected exit 0, got: {:?}", output.status);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let lines: Vec<&str> = stdout.lines().collect();
-    // All 25 lines should appear (full file from +1)
-    assert_eq!(lines.len(), 25, "Expected all 25 lines, got {}: {lines:?}", lines.len());
-    assert!(stdout.contains("Line 1"), "Expected Line 1: {stdout:?}");
-    assert!(stdout.contains("Line 25"), "Expected Line 25: {stdout:?}");
 }
 
 #[test]
@@ -1080,7 +1054,7 @@ fn explicit_profile_overrides_extension_auto_select() {
 }
 
 #[test]
-fn list_profiles_shows_markdown_builtin() {
+fn list_profiles_shows_logs_builtin() {
     let tmp = TempDir::new().unwrap();
     ctail()
         .args(["--list-profiles"])
@@ -1088,6 +1062,54 @@ fn list_profiles_shows_markdown_builtin() {
         .env_remove("HOME")
         .assert()
         .success()
-        .stdout(predicate::str::contains("markdown"))
+        .stdout(predicate::str::contains("logs"))
         .stdout(predicate::str::contains("built-in"));
+}
+
+#[test]
+fn syntect_highlights_sh_file() {
+    // ctail with a .sh file should get syntect highlighting (ANSI codes)
+    let dir = TempDir::new().unwrap();
+    let sh_path = dir.path().join("test.sh");
+    std::fs::write(&sh_path, "#!/bin/bash\n# comment\necho $HOME\n").unwrap();
+
+    let output = StdCommand::new(ctail_bin())
+        .args(["--color", "always"])
+        .arg(sh_path.to_str().unwrap())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("failed to run ctail");
+
+    assert!(output.status.success(), "Expected exit 0, got: {:?}", output.status);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        has_ansi_codes(&stdout),
+        "Expected ANSI codes from syntect for shell: {stdout:?}"
+    );
+}
+
+#[test]
+fn syntect_highlights_rust_file() {
+    // ctail with a .rs file should get syntect highlighting
+    let dir = TempDir::new().unwrap();
+    let rs_path = dir.path().join("test.rs");
+    std::fs::write(&rs_path, "fn main() {\n    let x = 42;\n    println!(\"hello\");\n}\n").unwrap();
+
+    let output = StdCommand::new(ctail_bin())
+        .args(["--color", "always"])
+        .arg(rs_path.to_str().unwrap())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("failed to run ctail");
+
+    assert!(output.status.success(), "Expected exit 0, got: {:?}", output.status);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        has_ansi_codes(&stdout),
+        "Expected ANSI codes from syntect for Rust: {stdout:?}"
+    );
 }

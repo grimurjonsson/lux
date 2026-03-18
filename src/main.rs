@@ -12,6 +12,7 @@ use ctail::filter::LineFilter;
 use ctail::follow;
 use ctail::output::detect_color_mode;
 use ctail::rules::build_rules_with_config;
+use ctail::syntax::SyntaxHighlighter;
 use ctail::tail::{self, LineSpec};
 use ctail::trigger::{OutputDecision, TriggerFilter};
 use ctail::wizard;
@@ -65,6 +66,8 @@ fn run() -> anyhow::Result<()> {
     if cli.file.is_none()
         && !cli.list_colors
         && !cli.list_profiles
+        && !cli.list_themes
+        && !cli.list_syntaxes
         && cli.rules.is_empty()
         && cli.profile.is_none()
         && cli.trigger.is_empty()
@@ -88,6 +91,18 @@ fn run() -> anyhow::Result<()> {
         config::print_profiles(cli.config.as_deref().map(Path::new))?;
         std::process::exit(0);
     }
+    if cli.list_themes {
+        for name in SyntaxHighlighter::available_themes() {
+            println!("{name}");
+        }
+        std::process::exit(0);
+    }
+    if cli.list_syntaxes {
+        for (name, exts) in SyntaxHighlighter::available_syntaxes() {
+            println!("{name}: {}", exts.join(", "));
+        }
+        std::process::exit(0);
+    }
 
     let color_mode = detect_color_mode(&cli.color);
 
@@ -102,15 +117,27 @@ fn run() -> anyhow::Result<()> {
         }
     }
 
-    // Determine active profile: explicit --profile > extension auto-select > default_profile > None
+    // Determine active profile: explicit --profile > extension auto-select > content sniff > default_profile > None
+    let mut stdin_buffer: Vec<String> = Vec::new();
     let active_profile_name: Option<String> = if cli.profile.is_some() {
         cli.profile.clone()
     } else if let Some(ref file_path) = cli.file {
         // Auto-select profile by file extension
-        std::path::Path::new(file_path)
-            .extension()
+        let path = std::path::Path::new(file_path);
+        path.extension()
             .and_then(|ext| ext.to_str())
             .and_then(|ext| config::find_profile_by_extension(ext, &merged_profiles))
+    } else if stdin_is_pipe() {
+        // Buffer first lines from stdin for content-based detection
+        let stdin = io::stdin();
+        let locked = stdin.lock();
+        for line in locked.lines().take(10) {
+            match line {
+                Ok(l) => stdin_buffer.push(l),
+                Err(_) => break,
+            }
+        }
+        config::detect_profile_from_content(&stdin_buffer)
     } else {
         None
     }
@@ -131,7 +158,20 @@ fn run() -> anyhow::Result<()> {
         active_profile_name.as_deref(),
         Some(&merged_profiles),
     )?;
-    let engine = Engine::new(rules, color_mode.color_enabled());
+
+    // Create syntect highlighter for the file
+    // Theme priority: --theme CLI flag > config.toml theme > default (Catppuccin Mocha)
+    let syntax_highlighter = cli.file.as_ref().and_then(|file_path| {
+        let path = std::path::Path::new(file_path);
+        let theme = cli.theme.as_deref()
+            .or_else(|| config.as_ref().and_then(|(c, _)| c.theme.as_deref()));
+        let syntax_map = config.as_ref()
+            .map(|(c, _)| &c.syntax_map)
+            .filter(|m| !m.is_empty());
+        SyntaxHighlighter::for_file(path, theme, syntax_map)
+    });
+
+    let engine = Engine::new(rules, color_mode.color_enabled(), syntax_highlighter);
 
     // Merge trigger settings: CLI flags override profile settings
     let trigger_patterns: Vec<String> = if !cli.trigger.is_empty() {
@@ -246,9 +286,12 @@ fn run() -> anyhow::Result<()> {
     } else {
         // Stdin pipe mode
         // -n is silently ignored per user decision
+        // Chain any buffered lines (from content detection) with remaining stdin
         let stdin = io::stdin().lock();
+        let buffered = stdin_buffer.into_iter().map(Ok);
+        let all_lines = buffered.chain(stdin.lines());
         if trigger_filter.is_active() {
-            for line in stdin.lines() {
+            for line in all_lines {
                 let line = line?;
                 if filter.is_active() && !filter.should_show(&line) {
                     continue;
@@ -265,7 +308,7 @@ fn run() -> anyhow::Result<()> {
                 }
             }
         } else {
-            for line in stdin.lines() {
+            for line in all_lines {
                 let line = line?;
                 if filter.is_active() && !filter.should_show(&line) {
                     continue;

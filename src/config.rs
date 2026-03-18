@@ -47,6 +47,13 @@ pub struct Config {
     pub profiles: HashMap<String, ProfileConfig>,
     #[serde(default)]
     pub default_profile: Option<String>,
+    /// Syntect color theme name (e.g. "Solarized (dark)").
+    #[serde(default)]
+    pub theme: Option<String>,
+    /// Custom syntax mappings: extension or filename → syntax name.
+    /// e.g. { "justfile" = "Makefile", "tf" = "HCL" }
+    #[serde(default)]
+    pub syntax_map: HashMap<String, String>,
 }
 
 /// Return the default config file path using XDG_CONFIG_HOME or $HOME/.config.
@@ -153,81 +160,10 @@ pub fn set_default_profile(explicit_path: Option<&Path>, name: Option<&str>) -> 
 
 /// Return built-in profiles that ship with ctail.
 ///
-/// Currently includes a "markdown" profile for rendering .md files with
-/// syntax highlighting and full-file display.
+/// Only "logs" remains as a built-in. Syntect handles syntax highlighting
+/// for source code files (markdown, yaml, toml, shell, etc.).
 pub fn builtin_profiles() -> HashMap<String, ProfileConfig> {
     let mut profiles = HashMap::new();
-    profiles.insert(
-        "markdown".to_string(),
-        ProfileConfig {
-            rules: vec![
-                RuleConfig { pattern: r"^# .+".to_string(), style: "bold+cyan".to_string(), scope: "line".to_string() },
-                RuleConfig { pattern: r"^## .+".to_string(), style: "bold+green".to_string(), scope: "line".to_string() },
-                RuleConfig { pattern: r"^### .+".to_string(), style: "bold+yellow".to_string(), scope: "line".to_string() },
-                RuleConfig { pattern: r"^####+ .+".to_string(), style: "bold+magenta".to_string(), scope: "line".to_string() },
-                RuleConfig { pattern: r"`[^`]+`".to_string(), style: "cyan".to_string(), scope: "match".to_string() },
-                RuleConfig { pattern: r"^```.*".to_string(), style: "dim".to_string(), scope: "line".to_string() },
-                RuleConfig { pattern: r"\*\*[^*]+\*\*".to_string(), style: "bold".to_string(), scope: "match".to_string() },
-                RuleConfig { pattern: r"\*[^*]+\*".to_string(), style: "italic".to_string(), scope: "match".to_string() },
-                RuleConfig { pattern: r"^\s*[-*+] ".to_string(), style: "blue".to_string(), scope: "match".to_string() },
-                RuleConfig { pattern: r"^\s*\d+\. ".to_string(), style: "blue".to_string(), scope: "match".to_string() },
-                RuleConfig { pattern: r"\[([^\]]+)\]\([^)]+\)".to_string(), style: "underline+blue".to_string(), scope: "match".to_string() },
-                RuleConfig { pattern: r"^>\s".to_string(), style: "dim+italic".to_string(), scope: "line".to_string() },
-                RuleConfig { pattern: r"^---$".to_string(), style: "dim".to_string(), scope: "line".to_string() },
-            ],
-            trigger: vec![],
-            before: None,
-            after: None,
-            lines: Some("+1".to_string()),
-            extensions: vec!["md".to_string(), "markdown".to_string(), "mdx".to_string()],
-        },
-    );
-    profiles.insert(
-        "yaml".to_string(),
-        ProfileConfig {
-            rules: vec![
-                RuleConfig { pattern: r"#.*".to_string(), style: "dim".to_string(), scope: "match".to_string() },
-                RuleConfig { pattern: r"^[\w._-]+:".to_string(), style: "bold+cyan".to_string(), scope: "match".to_string() },
-                RuleConfig { pattern: r"^\s+[\w._-]+:".to_string(), style: "cyan".to_string(), scope: "match".to_string() },
-                RuleConfig { pattern: r"^\s*-\s+[\w._-]+:".to_string(), style: "cyan".to_string(), scope: "match".to_string() },
-                RuleConfig { pattern: r":\s+(true|false|yes|no|on|off)$".to_string(), style: "magenta".to_string(), scope: "match".to_string() },
-                RuleConfig { pattern: r":\s+\d[\d.]*$".to_string(), style: "yellow".to_string(), scope: "match".to_string() },
-                RuleConfig { pattern: r#""[^"]*""#.to_string(), style: "green".to_string(), scope: "match".to_string() },
-                RuleConfig { pattern: r"'[^']*'".to_string(), style: "green".to_string(), scope: "match".to_string() },
-                RuleConfig { pattern: r"^\s*- ".to_string(), style: "blue".to_string(), scope: "line".to_string() },
-                RuleConfig { pattern: r"^---$".to_string(), style: "dim".to_string(), scope: "line".to_string() },
-            ],
-            trigger: vec![],
-            before: None,
-            after: None,
-            lines: Some("+1".to_string()),
-            extensions: vec!["yaml".to_string(), "yml".to_string()],
-        },
-    );
-    profiles.insert(
-        "toml".to_string(),
-        ProfileConfig {
-            rules: vec![
-                RuleConfig { pattern: r"^#.*".to_string(), style: "dim".to_string(), scope: "line".to_string() },
-                // [top] or [[top]] — no dots
-                RuleConfig { pattern: r"^\[{1,2}[^\].]+\]{1,2}$".to_string(), style: "bold+magenta".to_string(), scope: "line".to_string() },
-                // [a.b] or [[a.b]] — one dot
-                RuleConfig { pattern: r"^\[{1,2}[^\].]+\.[^\].]+\]{1,2}$".to_string(), style: "bold+green".to_string(), scope: "line".to_string() },
-                // [a.b.c] or [[a.b.c]] — two+ dots
-                RuleConfig { pattern: r"^\[{1,2}[^\].]+\.[^\].]+\..+\]{1,2}$".to_string(), style: "bold+yellow".to_string(), scope: "line".to_string() },
-                RuleConfig { pattern: r"^[\w._-]+\s*=".to_string(), style: "bold+cyan".to_string(), scope: "match".to_string() },
-                RuleConfig { pattern: r"\b(true|false)\b".to_string(), style: "magenta".to_string(), scope: "match".to_string() },
-                RuleConfig { pattern: r#""[^"]*""#.to_string(), style: "green".to_string(), scope: "match".to_string() },
-                RuleConfig { pattern: r"'[^']*'".to_string(), style: "green".to_string(), scope: "match".to_string() },
-                RuleConfig { pattern: r"\[([^\]]*)\]".to_string(), style: "yellow".to_string(), scope: "match".to_string() },
-            ],
-            trigger: vec![],
-            before: None,
-            after: None,
-            lines: Some("+1".to_string()),
-            extensions: vec!["toml".to_string()],
-        },
-    );
     profiles.insert(
         "logs".to_string(),
         ProfileConfig {
@@ -246,7 +182,56 @@ pub fn builtin_profiles() -> HashMap<String, ProfileConfig> {
             extensions: vec!["log".to_string()],
         },
     );
+    profiles.insert(
+        "help".to_string(),
+        ProfileConfig {
+            rules: vec![
+                // 1. Section headers: "Usage:", "Commands:", "Options:", etc.
+                RuleConfig { pattern: r"^[A-Z][a-zA-Z ]+:$".to_string(), style: "bold+cyan".to_string(), scope: "line".to_string() },
+                // 2. Long flags: --color, --profile, --strip-ansi
+                RuleConfig { pattern: r"--[a-zA-Z][-a-zA-Z0-9]*".to_string(), style: "bold+green".to_string(), scope: "match".to_string() },
+                // 3. Short flags: -r, -f, -h (word boundary prevents matching inside long flags)
+                RuleConfig { pattern: r"-[a-zA-Z]\b".to_string(), style: "bold+green".to_string(), scope: "match".to_string() },
+                // 4. Placeholder values: <RULES>, <COLOR>, [FILE], [OPTIONS]
+                RuleConfig { pattern: r"<[A-Z_]+>|\[[A-Z_]+\]".to_string(), style: "cyan".to_string(), scope: "match".to_string() },
+                // 5. Default values: [default: auto], [default: 20]
+                RuleConfig { pattern: r"\[default: [^\]]+\]".to_string(), style: "dim".to_string(), scope: "match".to_string() },
+                // 6. Possible values: [possible values: auto, always, never]
+                RuleConfig { pattern: r"\[possible values: [^\]]+\]".to_string(), style: "dim".to_string(), scope: "match".to_string() },
+                // 7. Subcommand names: indented words at start of line
+                RuleConfig { pattern: r"^  \w[-\w]*".to_string(), style: "yellow".to_string(), scope: "match".to_string() },
+                // 8. Quoted strings: "10", "+5", "^==="
+                RuleConfig { pattern: r#""[^"]*""#.to_string(), style: "magenta".to_string(), scope: "match".to_string() },
+                // 9. Tool name in Usage line
+                RuleConfig { pattern: r"Usage: (\w+)".to_string(), style: "bold+white".to_string(), scope: "cap1".to_string() },
+            ],
+            trigger: vec![],
+            before: None,
+            after: None,
+            lines: None,
+            extensions: vec![],
+        },
+    );
     profiles
+}
+
+/// Detect a profile by sniffing the first lines of stdin content.
+///
+/// Currently detects help text (clap/argparse style) by looking for "Usage:" and
+/// flag patterns like "--option" or section headers like "Options:".
+pub fn detect_profile_from_content(lines: &[String]) -> Option<String> {
+    let has_usage = lines.iter().any(|l| l.contains("Usage:"));
+    let has_flags = lines.iter().any(|l| l.contains("--"));
+    let has_section = lines.iter().any(|l| {
+        let trimmed = l.trim();
+        trimmed == "Options:" || trimmed == "Commands:" || trimmed == "Arguments:"
+    });
+
+    if has_usage && (has_flags || has_section) {
+        return Some("help".to_string());
+    }
+
+    None
 }
 
 /// Find a profile name that matches the given file extension.
@@ -413,11 +398,12 @@ fn print_profile_entry(
         writeln!(out, "    {}   {l}", "lines:".dimmed())?;
     }
     if !profile.extensions.is_empty() {
+        let parts: Vec<String> = profile.extensions.iter().map(|e| format!(".{e}")).collect();
         writeln!(
             out,
             "    {} {}",
             "auto:".dimmed(),
-            profile.extensions.iter().map(|e| format!(".{e}")).collect::<Vec<_>>().join(", ")
+            parts.join(", ")
         )?;
     }
     Ok(())
@@ -696,7 +682,7 @@ style = "blue"
         print_profiles_to(Some(&nonexistent), None, &mut buf).unwrap();
         let output = strip_ansi(&String::from_utf8(buf).unwrap());
         // Even without a config file, built-in profiles are shown
-        assert!(output.contains("markdown"), "Expected built-in markdown profile. Got: {output}");
+        assert!(output.contains("logs"), "Expected built-in logs profile. Got: {output}");
         assert!(output.contains("(built-in)"), "Expected built-in tag. Got: {output}");
     }
 
@@ -746,7 +732,7 @@ style = "red"
         print_profiles_to(None, Some((&load_config(Some(&config_path)).unwrap().unwrap().0, config_path.clone())), &mut buf).unwrap();
         let output = strip_ansi(&String::from_utf8(buf).unwrap());
         // Built-in profiles should still be shown
-        assert!(output.contains("markdown"), "Expected built-in markdown profile. Got: {output}");
+        assert!(output.contains("logs"), "Expected built-in logs profile. Got: {output}");
         assert!(output.contains("(built-in)"), "Expected built-in tag. Got: {output}");
     }
 
@@ -798,9 +784,10 @@ lines = "+1"
         assert!(output.contains("    after:   ^---"), "Expected after info. Got: {output}");
         assert!(output.contains("    lines:   +1"), "Expected lines info. Got: {output}");
         // The unittest-errors profile itself should have no style rules
-        // (built-in markdown profile will have them, but we check unittest-errors section only)
+        // (built-in profiles will have them, but we check only the unittest-errors section)
         let unittest_section = output.split("unittest-errors").nth(1).unwrap_or("");
-        let unittest_before_next = unittest_section.split("markdown").next().unwrap_or(unittest_section);
+        // Split at the next profile entry (indicated by "(built-in)" tag for built-in profiles)
+        let unittest_before_next = unittest_section.split("(built-in)").next().unwrap_or(unittest_section);
         assert!(!unittest_before_next.contains("style:"), "unittest-errors should not show style rules. Got: {output}");
     }
 
@@ -853,14 +840,28 @@ lines = "+1"
     // === builtin_profiles tests ===
 
     #[test]
-    fn builtin_profiles_contains_markdown() {
+    fn builtin_profiles_contains_logs() {
         let profiles = builtin_profiles();
-        assert!(profiles.contains_key("markdown"), "Expected 'markdown' built-in profile");
-        let md = &profiles["markdown"];
-        assert!(!md.rules.is_empty(), "Markdown profile should have rules");
-        assert!(md.rules.len() >= 10, "Expected at least 10 markdown rules, got {}", md.rules.len());
-        assert_eq!(md.extensions, vec!["md", "markdown", "mdx"]);
-        assert_eq!(md.lines, Some("+1".to_string()));
+        assert!(profiles.contains_key("logs"), "Expected 'logs' built-in profile");
+        let logs = &profiles["logs"];
+        assert!(!logs.rules.is_empty(), "Logs profile should have rules");
+        assert_eq!(logs.extensions, vec!["log"]);
+        assert_eq!(logs.lines, None);
+    }
+
+    #[test]
+    fn builtin_profiles_count() {
+        let profiles = builtin_profiles();
+        assert_eq!(profiles.len(), 2, "Expected 'logs' and 'help' built-in profiles. Got: {:?}", profiles.keys().collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn builtin_profiles_contains_help() {
+        let profiles = builtin_profiles();
+        assert!(profiles.contains_key("help"), "Expected 'help' built-in profile");
+        let help = &profiles["help"];
+        assert!(!help.rules.is_empty(), "Help profile should have rules");
+        assert!(help.extensions.is_empty(), "Help profile should not have file extensions");
     }
 
     #[test]
@@ -869,10 +870,12 @@ lines = "+1"
         let config = Config {
             rules: vec![],
             default_profile: None,
+            theme: None,
+            syntax_map: HashMap::new(),
             profiles: {
                 let mut p = HashMap::new();
                 p.insert(
-                    "markdown".to_string(),
+                    "logs".to_string(),
                     ProfileConfig {
                         rules: vec![RuleConfig {
                             pattern: "CUSTOM".to_string(),
@@ -896,24 +899,17 @@ lines = "+1"
         )
         .unwrap();
         let output = strip_ansi(&String::from_utf8(buf).unwrap());
-        // User markdown profile should appear without (built-in) tag
-        assert!(output.contains("markdown"), "Expected markdown in output. Got: {output}");
-        assert!(!output.contains("markdown (built-in)"), "User override should not show built-in tag for markdown. Got: {output}");
+        // User logs profile should appear without (built-in) tag
+        assert!(output.contains("logs"), "Expected logs in output. Got: {output}");
+        assert!(!output.contains("logs (built-in)"), "User override should not show built-in tag for logs. Got: {output}");
         assert!(output.contains("CUSTOM"), "Expected user's CUSTOM rule. Got: {output}");
     }
 
     #[test]
-    fn find_profile_by_extension_md() {
+    fn find_profile_by_extension_log() {
         let profiles = builtin_profiles();
-        let result = find_profile_by_extension("md", &profiles);
-        assert_eq!(result, Some("markdown".to_string()));
-    }
-
-    #[test]
-    fn find_profile_by_extension_markdown() {
-        let profiles = builtin_profiles();
-        let result = find_profile_by_extension("markdown", &profiles);
-        assert_eq!(result, Some("markdown".to_string()));
+        let result = find_profile_by_extension("log", &profiles);
+        assert_eq!(result, Some("logs".to_string()));
     }
 
     #[test]

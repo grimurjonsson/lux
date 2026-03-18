@@ -32,6 +32,18 @@ pub struct Cli {
     #[arg(long)]
     pub list_colors: bool,
 
+    /// List available syntax highlighting themes
+    #[arg(long)]
+    pub list_themes: bool,
+
+    /// List available syntax definitions and their file extensions
+    #[arg(long)]
+    pub list_syntaxes: bool,
+
+    /// Syntax highlighting theme (overrides config.toml)
+    #[arg(long)]
+    pub theme: Option<String>,
+
     /// Follow file by descriptor (reopen not attempted after rename/delete)
     #[arg(short = 'f')]
     pub follow_descriptor: bool,
