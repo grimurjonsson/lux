@@ -445,6 +445,7 @@ mod tests {
         let config = Config {
             rules: vec![make_rule_config("CUSTOM", "green")],
             profiles: HashMap::new(),
+            default_profile: None,
         };
         let cli = vec!["ERROR:red".to_string()];
         let rules = build_rules_with_config(&cli, Some(&config), None, None).unwrap();
@@ -472,6 +473,7 @@ mod tests {
         let config = Config {
             rules: vec![make_rule_config("GLOBAL", "blue")],
             profiles,
+            default_profile: None,
         };
         let rules = build_rules_with_config(&[], Some(&config), Some("django"), None).unwrap();
         // 1 global + 1 profile + 5 defaults = 7
@@ -484,6 +486,7 @@ mod tests {
     fn test_build_with_config_unknown_profile() {
         let config = Config {
             rules: vec![],
+            default_profile: None,
             profiles: {
                 let mut p = HashMap::new();
                 p.insert(

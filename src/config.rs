@@ -45,6 +45,8 @@ pub struct Config {
     pub rules: Vec<RuleConfig>,
     #[serde(default)]
     pub profiles: HashMap<String, ProfileConfig>,
+    #[serde(default)]
+    pub default_profile: Option<String>,
 }
 
 /// Return the default config file path using XDG_CONFIG_HOME or $HOME/.config.
@@ -87,6 +89,66 @@ pub fn load_config(explicit_path: Option<&Path>) -> Result<Option<(Config, PathB
         .map_err(|e| anyhow!("failed to parse {}: {e}", path.display()))?;
 
     Ok(Some((config, path)))
+}
+
+/// Set or clear the default_profile field in the config file.
+///
+/// Reads the raw TOML, updates/inserts the `default_profile` line, and writes back.
+/// Creates the config file if it doesn't exist.
+pub fn set_default_profile(explicit_path: Option<&Path>, name: Option<&str>) -> Result<()> {
+    let path = if let Some(p) = explicit_path {
+        p.to_path_buf()
+    } else {
+        default_config_path()
+            .ok_or_else(|| anyhow!("cannot determine config path: HOME not set"))?
+    };
+
+    let content = if path.exists() {
+        std::fs::read_to_string(&path)
+            .map_err(|e| anyhow!("failed to read {}: {e}", path.display()))?
+    } else {
+        // Create parent dirs and start with empty config
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| anyhow!("failed to create {}: {e}", parent.display()))?;
+        }
+        String::new()
+    };
+
+    // Update or insert the default_profile line
+    let has_field = content.lines().any(|l| l.trim_start().starts_with("default_profile"));
+    let new_content = if let Some(profile_name) = name {
+        if has_field {
+            content
+                .lines()
+                .map(|l| {
+                    if l.trim_start().starts_with("default_profile") {
+                        format!("default_profile = \"{profile_name}\"")
+                    } else {
+                        l.to_string()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+                + if content.ends_with('\n') { "\n" } else { "" }
+        } else {
+            // Insert at the top, before any [[rules]] or [profiles]
+            format!("default_profile = \"{profile_name}\"\n{content}")
+        }
+    } else {
+        // Clear: remove the line
+        content
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("default_profile"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + if content.ends_with('\n') { "\n" } else { "" }
+    };
+
+    std::fs::write(&path, new_content)
+        .map_err(|e| anyhow!("failed to write {}: {e}", path.display()))?;
+
+    Ok(())
 }
 
 /// Return built-in profiles that ship with ctail.
@@ -164,6 +226,24 @@ pub fn builtin_profiles() -> HashMap<String, ProfileConfig> {
             after: None,
             lines: Some("+1".to_string()),
             extensions: vec!["toml".to_string()],
+        },
+    );
+    profiles.insert(
+        "logs".to_string(),
+        ProfileConfig {
+            rules: vec![
+                RuleConfig { pattern: r"(?i)fatal|critical".to_string(), style: "bold+red".to_string(), scope: "line".to_string() },
+                RuleConfig { pattern: r"(?i)error".to_string(), style: "red".to_string(), scope: "line".to_string() },
+                RuleConfig { pattern: r"(?i)warn".to_string(), style: "yellow".to_string(), scope: "line".to_string() },
+                RuleConfig { pattern: r"(?i)info".to_string(), style: "white".to_string(), scope: "line".to_string() },
+                RuleConfig { pattern: r"(?i)debug".to_string(), style: "dim".to_string(), scope: "line".to_string() },
+                RuleConfig { pattern: r"(?i)trace".to_string(), style: "240".to_string(), scope: "line".to_string() },
+            ],
+            trigger: vec![],
+            before: None,
+            after: None,
+            lines: None,
+            extensions: vec!["log".to_string()],
         },
     );
     profiles
@@ -788,6 +868,7 @@ lines = "+1"
         let mut buf = Vec::new();
         let config = Config {
             rules: vec![],
+            default_profile: None,
             profiles: {
                 let mut p = HashMap::new();
                 p.insert(

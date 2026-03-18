@@ -45,6 +45,16 @@ fn run() -> anyhow::Result<()> {
                         let cfg = config.as_deref().or(cli.config.as_deref()).map(Path::new);
                         config::print_profiles(cfg)?;
                     }
+                    ProfileAction::SetDefault { name, config } => {
+                        let cfg = config.as_deref().or(cli.config.as_deref()).map(Path::new);
+                        config::set_default_profile(cfg, Some(name))?;
+                        eprintln!("Default profile set to: {name}");
+                    }
+                    ProfileAction::ClearDefault { config } => {
+                        let cfg = config.as_deref().or(cli.config.as_deref()).map(Path::new);
+                        config::set_default_profile(cfg, None)?;
+                        eprintln!("Default profile cleared");
+                    }
                 }
                 std::process::exit(0);
             }
@@ -92,7 +102,7 @@ fn run() -> anyhow::Result<()> {
         }
     }
 
-    // Determine active profile: explicit --profile > extension auto-select > None
+    // Determine active profile: explicit --profile > extension auto-select > default_profile > None
     let active_profile_name: Option<String> = if cli.profile.is_some() {
         cli.profile.clone()
     } else if let Some(ref file_path) = cli.file {
@@ -103,7 +113,12 @@ fn run() -> anyhow::Result<()> {
             .and_then(|ext| config::find_profile_by_extension(ext, &merged_profiles))
     } else {
         None
-    };
+    }
+    .or_else(|| {
+        config
+            .as_ref()
+            .and_then(|(cfg, _)| cfg.default_profile.clone())
+    });
 
     // Look up the active profile config
     let profile = active_profile_name
@@ -164,21 +179,17 @@ fn run() -> anyhow::Result<()> {
             anyhow::bail!("cannot use file argument with piped input");
         }
 
-        let has_explicit_n = cli.lines.is_some();
         let has_follow_flag = cli.follow_descriptor || cli.follow_name;
 
-        // Three-mode detection:
-        // 1. file + explicit -n + NO follow flag = PRINT AND EXIT
-        // 2. file + follow flag (with or without -n) = FOLLOW
-        // 3. bare file (no -n, no -f/-F) = implied -n 10 -F = FOLLOW
-        // Profile lines count as explicit -n for print-and-exit detection
-        let has_n = has_explicit_n || profile_lines.is_some();
-        let is_print_and_exit = has_n && !has_follow_flag;
+        // Two-mode detection:
+        // 1. file + -f or -F = FOLLOW
+        // 2. otherwise = PRINT AND EXIT (show last N lines)
+        let is_print_and_exit = !has_follow_flag;
 
         // Resolve line count: explicit CLI -n > profile lines > default 10
         let lines_str = cli.lines.as_deref()
             .or(profile_lines.as_deref())
-            .unwrap_or("10");
+            .unwrap_or("20");
         let line_spec = tail::parse_line_spec(lines_str)?;
         let path = std::path::Path::new(file_path);
 
@@ -203,7 +214,7 @@ fn run() -> anyhow::Result<()> {
             print_lines_filtered(&initial_lines, &engine, &mut writer, &mut trigger_filter, &filter)?;
             // Done -- return without following
         } else {
-            // -F or bare file: follow by name, file may not exist yet
+            // -F: follow by name, file may not exist yet
             match std::fs::File::open(path) {
                 Ok(mut file) => {
                     let initial_lines = read_initial(&mut file, &line_spec)?;

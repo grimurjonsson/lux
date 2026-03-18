@@ -653,50 +653,27 @@ fn follow_reads_new_lines() {
 }
 
 #[test]
-fn bare_file_implies_follow() {
-    // ctail <file> (no flags) should NOT exit immediately -- it follows
-    let lines: String = (1..=5).map(|i| format!("line {i}\n")).collect();
+fn bare_file_prints_and_exits() {
+    // ctail <file> (no flags) should print last 20 lines and exit (not follow)
+    let lines: String = (1..=30).map(|i| format!("line {i}\n")).collect();
     let (_dir, path) = make_temp_log(&lines);
 
-    let mut child = StdCommand::new(ctail_bin())
+    let output = StdCommand::new(ctail_bin())
         .arg("--color")
         .arg("never")
         .arg(path.to_str().unwrap())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .spawn()
-        .expect("failed to spawn ctail");
+        .output()
+        .expect("failed to run ctail");
 
-    // Wait a bit -- if it exits immediately, it's wrong
-    std::thread::sleep(Duration::from_millis(500));
-
-    // Check it's still running
-    let status = child.try_wait().unwrap();
-    assert!(
-        status.is_none(),
-        "bare file arg should follow (not exit immediately)"
-    );
-
-    // Append a line and check it appears
-    {
-        let mut f = std::fs::OpenOptions::new()
-            .append(true)
-            .open(&path)
-            .unwrap();
-        writeln!(f, "BARE FILE FOLLOW TEST").unwrap();
-        f.flush().unwrap();
-    }
-
-    std::thread::sleep(Duration::from_millis(1000));
-
-    child.kill().ok();
-    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "ctail should exit successfully");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("BARE FILE FOLLOW TEST"),
-        "Expected to see appended line in bare file follow: {stdout:?}"
-    );
+    let out_lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(out_lines.len(), 20, "bare file should show last 20 lines");
+    assert!(out_lines[0].contains("line 11"), "should start at line 11");
+    assert!(out_lines[19].contains("line 30"), "should end at line 30");
 }
 
 #[test]

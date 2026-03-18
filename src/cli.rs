@@ -17,7 +17,7 @@ pub struct Cli {
     pub color: ColorChoice,
 
     /// Select a named profile from the config file
-    #[arg(long)]
+    #[arg(short = 'p', long)]
     pub profile: Option<String>,
 
     /// Path to a custom config file (overrides XDG discovery)
@@ -45,23 +45,23 @@ pub struct Cli {
     pub lines: Option<String>,
 
     /// Trigger pattern(s) — suppress output until a match, then show context window
-    #[arg(long = "trigger", action = clap::ArgAction::Append)]
+    #[arg(short = 't', long = "trigger", action = clap::ArgAction::Append)]
     pub trigger: Vec<String>,
 
     /// Context before trigger: line count (e.g. "20") or regex boundary (e.g. "^===")
-    #[arg(long, default_value = "20")]
+    #[arg(short = 'b', long, default_value = "20")]
     pub before: String,
 
     /// Context after trigger: line count (e.g. "20") or regex boundary (e.g. "^---")
-    #[arg(long, default_value = "20")]
+    #[arg(short = 'a', long, default_value = "20")]
     pub after: String,
 
     /// Only show lines matching PATTERN (can be repeated)
-    #[arg(long = "include", action = clap::ArgAction::Append)]
+    #[arg(short = 'i', long = "include", action = clap::ArgAction::Append)]
     pub include: Vec<String>,
 
     /// Hide lines matching PATTERN (can be repeated)
-    #[arg(long = "exclude", action = clap::ArgAction::Append)]
+    #[arg(short = 'e', long = "exclude", action = clap::ArgAction::Append)]
     pub exclude: Vec<String>,
 
     /// Strip ANSI escape codes from input before pattern matching
@@ -123,6 +123,20 @@ pub enum ProfileAction {
     },
     /// List all profiles
     List {
+        /// Path to a custom config file (overrides XDG discovery)
+        #[arg(long)]
+        config: Option<String>,
+    },
+    /// Set the default profile (used when no --profile or extension match)
+    SetDefault {
+        /// Profile name to set as default
+        name: String,
+        /// Path to a custom config file (overrides XDG discovery)
+        #[arg(long)]
+        config: Option<String>,
+    },
+    /// Clear the default profile
+    ClearDefault {
         /// Path to a custom config file (overrides XDG discovery)
         #[arg(long)]
         config: Option<String>,
