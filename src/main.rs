@@ -1,6 +1,5 @@
 use std::io::{self, BufRead, BufWriter, Write};
 use std::path::Path;
-use std::thread;
 
 use anyhow::Context;
 use clap::{CommandFactory, Parser};
@@ -114,20 +113,16 @@ fn run() -> anyhow::Result<()> {
     // Load config file
     let config = config::load_config(cli.config.as_deref().map(Path::new))?;
 
-    // Spawn background update check thread (non-blocking)
+    // Update check: read cache (instant), spawn refresh subprocess if interval elapsed
     let update_interval = config
         .as_ref()
         .map(|(c, _)| c.update_check_interval_days)
         .unwrap_or(7);
-    let update_mode_for_thread = config
+    let update_mode_str = config
         .as_ref()
         .and_then(|(c, _)| c.update_mode.clone());
-    let update_handle = thread::spawn(move || {
-        lux::update::background_check(
-            update_interval,
-            update_mode_for_thread.as_deref(),
-        )
-    });
+    let cached_new_version = lux::update::check_cached(update_mode_str.as_deref());
+    lux::update::spawn_cache_refresh(update_interval, update_mode_str.as_deref());
 
     // Build merged profiles: built-in first, user profiles override
     let mut merged_profiles = config::builtin_profiles();
@@ -246,10 +241,12 @@ fn run() -> anyhow::Result<()> {
         // 2. otherwise = PRINT AND EXIT (show last N lines)
         let is_print_and_exit = !has_follow_flag;
 
-        // Resolve line count: explicit CLI -n > profile lines > default 10
+        // Resolve line count: explicit CLI -n > profile lines > default
+        // Print-and-exit shows the whole file by default; follow modes show last 20
+        let default_lines = if is_print_and_exit { "+1" } else { "20" };
         let lines_str = cli.lines.as_deref()
             .or(profile_lines.as_deref())
-            .unwrap_or("20");
+            .unwrap_or(default_lines);
         let line_spec = tail::parse_line_spec(lines_str)?;
         let path = std::path::Path::new(file_path);
 
@@ -339,16 +336,12 @@ fn run() -> anyhow::Result<()> {
         }
     }
 
-    // Check if background update thread finished (never block)
-    if update_handle.is_finished() {
-        if let Ok(result) = update_handle.join() {
-            if let Some(ref new_version) = result.new_version {
-                let update_mode = config
-                    .as_ref()
-                    .and_then(|(c, _)| c.update_mode.as_deref());
-                lux::update::handle_update_result(new_version, update_mode);
-            }
-        }
+    // Notify about available update (from cache, instant)
+    if let Some(ref new_version) = cached_new_version {
+        let update_mode = config
+            .as_ref()
+            .and_then(|(c, _)| c.update_mode.as_deref());
+        lux::update::handle_update_result(new_version, update_mode);
     }
 
     Ok(())

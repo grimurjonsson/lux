@@ -142,58 +142,75 @@ fn days_since(date: &str) -> i64 {
     y * 365 + m * 30 + d // approximate, only used for >= comparison
 }
 
-/// Result of a background update check.
-pub struct CheckResult {
-    pub new_version: Option<String>,
-}
-
-/// Run the background update check. Called from a spawned thread.
-///
-/// - Reads state file and config interval
-/// - Skips if disabled or interval not elapsed
-/// - Fetches latest version from GitHub if needed
-/// - Updates state file
-/// - Returns whether a newer version was found
-pub fn background_check(interval_days: u32, update_mode: Option<&str>) -> CheckResult {
-    // Disabled via config
-    if update_mode == Some("disabled") || interval_days == 0 {
-        return CheckResult { new_version: None };
+/// Check the cached state file for a newer version. Instant, no network.
+/// Returns Some(version) if a newer version is known from a previous check.
+pub fn check_cached(update_mode: Option<&str>) -> Option<String> {
+    if update_mode == Some("disabled") {
+        return None;
     }
 
-    let mut state = load_state();
+    let state = load_state();
     let current = current_version();
 
-    // Check if we need to hit the API or can use cached value
-    let latest = if check_interval_elapsed(&state, interval_days) {
-        // Interval elapsed — fetch fresh
-        if let Some(version) = fetch_latest_version() {
-            state.last_checked = Some(now_iso8601());
-            state.latest_version = Some(version.clone());
-            save_state(&state);
-            version
-        } else {
-            // Fetch failed — use cached if available
-            match state.latest_version {
-                Some(ref v) => v.clone(),
-                None => return CheckResult { new_version: None },
-            }
-        }
+    let latest = state.latest_version.as_deref()?;
+    if is_newer(latest, current) && !state.skipped_versions.contains(&latest.to_string()) {
+        Some(latest.to_string())
     } else {
-        // Interval not elapsed — use cached
-        match state.latest_version {
-            Some(ref v) => v.clone(),
-            None => return CheckResult { new_version: None },
-        }
+        None
+    }
+}
+
+/// Spawn a detached subprocess to refresh the update cache if the check interval
+/// has elapsed. The subprocess survives process exit, so even short-lived commands
+/// like `echo foo | lux` will eventually populate the cache.
+pub fn spawn_cache_refresh(interval_days: u32, update_mode: Option<&str>) {
+    if update_mode == Some("disabled") || interval_days == 0 {
+        return;
+    }
+
+    let state = load_state();
+    if !check_interval_elapsed(&state, interval_days) {
+        return;
+    }
+
+    let Some(state_path) = state_file_path() else {
+        return;
     };
 
-    // Compare
-    if is_newer(&latest, current) && !state.skipped_versions.contains(&latest) {
-        CheckResult {
-            new_version: Some(latest),
-        }
+    // Preserve existing skipped_versions
+    let skipped = if state.skipped_versions.is_empty() {
+        "[]".to_string()
     } else {
-        CheckResult { new_version: None }
-    }
+        let items: Vec<String> = state.skipped_versions.iter().map(|s| format!("\"{s}\"")).collect();
+        format!("[{}]", items.join(", "))
+    };
+
+    // Fire-and-forget: a shell script that curls the API, parses the version,
+    // and writes update.toml. Runs independently of this process.
+    let script = format!(
+        r#"
+        VERSION=$(curl --connect-timeout 5 --max-time 10 -s '{api_url}' \
+            | grep -o '"tag_name"[^"]*"[^"]*"' \
+            | head -1 \
+            | sed 's/.*"v\{{0,1\}}\([^"]*\)"/\1/')
+        if [ -n "$VERSION" ]; then
+            mkdir -p "$(dirname '{path}')"
+            DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+            printf 'last_checked = "%s"\nlatest_version = "%s"\nskipped_versions = {skipped}\n' \
+                "$DATE" "$VERSION" > '{path}'
+        fi
+        "#,
+        api_url = GITHUB_API_URL,
+        path = state_path.display(),
+        skipped = skipped,
+    );
+
+    let _ = std::process::Command::new("sh")
+        .args(["-c", &script])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn(); // fire-and-forget — don't wait
 }
 
 /// Check if stderr is a TTY.

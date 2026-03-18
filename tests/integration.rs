@@ -654,7 +654,7 @@ fn follow_reads_new_lines() {
 
 #[test]
 fn bare_file_prints_and_exits() {
-    // lux <file> (no flags) should print last 20 lines and exit (not follow)
+    // lux <file> (no flags) should print the whole file and exit (not follow)
     let lines: String = (1..=30).map(|i| format!("line {i}\n")).collect();
     let (_dir, path) = make_temp_log(&lines);
 
@@ -671,9 +671,9 @@ fn bare_file_prints_and_exits() {
     assert!(output.status.success(), "lux should exit successfully");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let out_lines: Vec<&str> = stdout.lines().collect();
-    assert_eq!(out_lines.len(), 20, "bare file should show last 20 lines");
-    assert!(out_lines[0].contains("line 11"), "should start at line 11");
-    assert!(out_lines[19].contains("line 30"), "should end at line 30");
+    assert_eq!(out_lines.len(), 30, "bare file should show all lines");
+    assert!(out_lines[0].contains("line 1"), "should start at line 1");
+    assert!(out_lines[29].contains("line 30"), "should end at line 30");
 }
 
 #[test]
