@@ -168,6 +168,58 @@ pub fn set_default_profile(explicit_path: Option<&Path>, name: Option<&str>) -> 
     Ok(())
 }
 
+/// Set or clear a top-level string field in the config file.
+///
+/// Reads the raw TOML, updates/inserts the field, and writes back.
+/// Creates the config file if it doesn't exist.
+pub fn set_config_field(field: &str, value: Option<&str>) -> Result<()> {
+    let path = default_config_path()
+        .ok_or_else(|| anyhow!("cannot determine config path: HOME not set"))?;
+
+    let content = if path.exists() {
+        std::fs::read_to_string(&path)
+            .map_err(|e| anyhow!("failed to read {}: {e}", path.display()))?
+    } else {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| anyhow!("failed to create {}: {e}", parent.display()))?;
+        }
+        String::new()
+    };
+
+    let has_field = content.lines().any(|l| l.trim_start().starts_with(field));
+    let new_content = if let Some(val) = value {
+        if has_field {
+            content
+                .lines()
+                .map(|l| {
+                    if l.trim_start().starts_with(field) {
+                        format!("{field} = \"{val}\"")
+                    } else {
+                        l.to_string()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+                + if content.ends_with('\n') { "\n" } else { "" }
+        } else {
+            format!("{field} = \"{val}\"\n{content}")
+        }
+    } else {
+        content
+            .lines()
+            .filter(|l| !l.trim_start().starts_with(field))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + if content.ends_with('\n') { "\n" } else { "" }
+    };
+
+    std::fs::write(&path, new_content)
+        .map_err(|e| anyhow!("failed to write {}: {e}", path.display()))?;
+
+    Ok(())
+}
+
 /// Return built-in profiles that ship with lux.
 ///
 /// Only "logs" remains as a built-in. Syntect handles syntax highlighting
@@ -943,5 +995,32 @@ lines = "+1"
 
         unsafe { restore_env("XDG_CONFIG_HOME", prev_xdg) };
         unsafe { restore_env("HOME", prev_home) };
+    }
+
+    #[test]
+    fn set_config_field_roundtrip() {
+        let tmp = TempDir::new().unwrap();
+        let prev = std::env::var("XDG_CONFIG_HOME").ok();
+        unsafe { set_env("XDG_CONFIG_HOME", tmp.path().to_str().unwrap()) };
+
+        let config_path = tmp.path().join("lux").join("config.toml");
+
+        // Set a field on a new file
+        set_config_field("update_mode", Some("notify")).unwrap();
+        let content = std::fs::read_to_string(&config_path).unwrap();
+        assert!(content.contains(r#"update_mode = "notify""#));
+
+        // Update the field
+        set_config_field("update_mode", Some("auto")).unwrap();
+        let content = std::fs::read_to_string(&config_path).unwrap();
+        assert!(content.contains(r#"update_mode = "auto""#));
+        assert!(!content.contains("notify"));
+
+        // Clear the field
+        set_config_field("update_mode", None).unwrap();
+        let content = std::fs::read_to_string(&config_path).unwrap();
+        assert!(!content.contains("update_mode"));
+
+        unsafe { restore_env("XDG_CONFIG_HOME", prev) };
     }
 }

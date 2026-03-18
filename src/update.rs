@@ -1,3 +1,4 @@
+use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 
 use regex::Regex;
@@ -193,6 +194,240 @@ pub fn background_check(interval_days: u32, update_mode: Option<&str>) -> CheckR
     } else {
         CheckResult { new_version: None }
     }
+}
+
+/// Check if stderr is a TTY.
+fn stderr_is_tty() -> bool {
+    use std::os::unix::fs::FileTypeExt;
+    std::fs::metadata("/dev/stderr")
+        .map(|m| m.file_type().is_char_device())
+        .unwrap_or(false)
+}
+
+/// Actions from the interactive prompt.
+#[derive(Debug, PartialEq)]
+pub enum UpdateAction {
+    UpdateNow,
+    SetNotify,
+    SetAuto,
+    SkipVersion,
+    Disable,
+    Notify,
+}
+
+/// Show the interactive update prompt. Returns the action chosen.
+pub fn show_update_prompt(new_version: &str) -> UpdateAction {
+    let current = current_version();
+    eprintln!();
+    eprintln!("lux v{new_version} is available (you have v{current})");
+    eprintln!();
+    eprintln!("  1) Update now");
+    eprintln!("  2) Always notify me (don't ask again)");
+    eprintln!("  3) Always auto-update (don't ask again)");
+    eprintln!("  4) Skip this version");
+    eprintln!("  5) Disable update checks");
+    eprintln!();
+    eprint!("Choose [1-5]: ");
+    let _ = io::stderr().flush();
+
+    let mut input = String::new();
+    let stdin = io::stdin();
+    if stdin.lock().read_line(&mut input).is_err() {
+        return UpdateAction::Notify;
+    }
+
+    match input.trim() {
+        "1" => UpdateAction::UpdateNow,
+        "2" => UpdateAction::SetNotify,
+        "3" => UpdateAction::SetAuto,
+        "4" => UpdateAction::SkipVersion,
+        "5" => UpdateAction::Disable,
+        _ => UpdateAction::Notify,
+    }
+}
+
+/// Handle the result of an update check, showing prompt or notification.
+pub fn handle_update_result(new_version: &str, update_mode: Option<&str>) {
+    match update_mode {
+        Some("disabled") => {}
+        Some("notify") => {
+            eprintln!("\nlux v{new_version} available — run 'lux update' to upgrade");
+        }
+        Some("auto") => {
+            perform_update(new_version);
+        }
+        _ => {
+            if stderr_is_tty() {
+                let action = show_update_prompt(new_version);
+                execute_action(action, new_version);
+            } else {
+                eprintln!("\nlux v{new_version} available — run 'lux update' to upgrade");
+            }
+        }
+    }
+}
+
+/// Execute the chosen action from the interactive prompt.
+fn execute_action(action: UpdateAction, new_version: &str) {
+    match action {
+        UpdateAction::UpdateNow => {
+            perform_update(new_version);
+        }
+        UpdateAction::SetNotify => {
+            if let Err(e) = config::set_config_field("update_mode", Some("notify")) {
+                eprintln!("lux: failed to save preference: {e}");
+            } else {
+                eprintln!("Preference saved. Future updates will show a notification.");
+            }
+        }
+        UpdateAction::SetAuto => {
+            if let Err(e) = config::set_config_field("update_mode", Some("auto")) {
+                eprintln!("lux: failed to save preference: {e}");
+            } else {
+                eprintln!("Preference saved. Future updates will install automatically.");
+            }
+        }
+        UpdateAction::SkipVersion => {
+            let mut state = load_state();
+            if !state.skipped_versions.contains(&new_version.to_string()) {
+                state.skipped_versions.push(new_version.to_string());
+                save_state(&state);
+            }
+            eprintln!("Skipped v{new_version}. You won't be notified about this version again.");
+        }
+        UpdateAction::Disable => {
+            if let Err(e) = config::set_config_field("update_mode", Some("disabled")) {
+                eprintln!("lux: failed to save preference: {e}");
+            } else {
+                eprintln!("Update checks disabled. Re-enable in ~/.config/lux/config.toml");
+            }
+        }
+        UpdateAction::Notify => {
+            eprintln!("\nlux v{new_version} available — run 'lux update' to upgrade");
+        }
+    }
+}
+
+/// Detect the platform target string (e.g. "aarch64-apple-darwin").
+fn detect_target() -> Option<String> {
+    let os_output = std::process::Command::new("uname").arg("-s").output().ok()?;
+    let arch_output = std::process::Command::new("uname").arg("-m").output().ok()?;
+
+    let os = String::from_utf8_lossy(&os_output.stdout).trim().to_lowercase();
+    let arch_raw = String::from_utf8_lossy(&arch_output.stdout).trim().to_string();
+
+    let arch = match arch_raw.as_str() {
+        "x86_64" => "x86_64",
+        "aarch64" | "arm64" => "aarch64",
+        _ => return None,
+    };
+
+    let platform = match os.as_str() {
+        "darwin" => "apple-darwin",
+        "linux" => "unknown-linux-gnu",
+        _ => return None,
+    };
+
+    Some(format!("{arch}-{platform}"))
+}
+
+/// Download and replace the current binary with the new version.
+pub fn perform_update(new_version: &str) {
+    let Some(target) = detect_target() else {
+        eprintln!("lux: could not detect platform");
+        return;
+    };
+
+    let current_exe = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("lux: could not determine binary path: {e}");
+            return;
+        }
+    };
+
+    let url = format!(
+        "https://github.com/grimurjonsson/lux/releases/download/v{new_version}/lux-{target}.tar.gz"
+    );
+
+    eprintln!("Downloading lux v{new_version}...");
+
+    let tmp_dir = format!("/tmp/lux-update-{}", std::process::id());
+    let tmp_archive = format!("{tmp_dir}/lux.tar.gz");
+
+    let _ = std::fs::create_dir_all(&tmp_dir);
+
+    let download = std::process::Command::new("curl")
+        .args(["-L", "-f", "--connect-timeout", "10", "--max-time", "120", "-o", &tmp_archive, &url])
+        .status();
+
+    match download {
+        Ok(s) if s.success() => {}
+        _ => {
+            eprintln!("lux: download failed");
+            let _ = std::fs::remove_dir_all(&tmp_dir);
+            return;
+        }
+    }
+
+    let extract = std::process::Command::new("tar")
+        .args(["-xzf", &tmp_archive, "-C", &tmp_dir])
+        .status();
+
+    match extract {
+        Ok(s) if s.success() => {}
+        _ => {
+            eprintln!("lux: extraction failed");
+            let _ = std::fs::remove_dir_all(&tmp_dir);
+            return;
+        }
+    }
+
+    let extracted = format!("{tmp_dir}/lux");
+    if !std::path::Path::new(&extracted).exists() {
+        eprintln!("lux: binary not found in archive");
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+        return;
+    }
+
+    let mv = std::process::Command::new("mv")
+        .args([&extracted, &current_exe.to_string_lossy().to_string()])
+        .status();
+
+    match mv {
+        Ok(s) if s.success() => {
+            let _ = std::process::Command::new("chmod")
+                .args(["+x", &current_exe.to_string_lossy().to_string()])
+                .status();
+            eprintln!("Updated to lux v{new_version}");
+        }
+        _ => {
+            eprintln!("lux: failed to replace binary. Try the install script:");
+            eprintln!("  curl -fsSL https://raw.githubusercontent.com/grimurjonsson/lux/main/scripts/install.sh | bash");
+        }
+    }
+
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+}
+
+/// Run the `lux update` subcommand. Synchronous, always hits the API.
+pub fn run_update_command() {
+    let current = current_version();
+
+    eprintln!("Checking for updates...");
+
+    let Some(latest) = fetch_latest_version() else {
+        eprintln!("lux: could not check for updates (network error or curl not found)");
+        return;
+    };
+
+    if !is_newer(&latest, current) {
+        eprintln!("lux v{current} is up to date");
+        return;
+    }
+
+    let action = show_update_prompt(&latest);
+    execute_action(action, &latest);
 }
 
 #[cfg(test)]
