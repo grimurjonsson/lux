@@ -8,9 +8,9 @@ use owo_colors::{Style, XtermColors};
 /// - Extended named colors: orange, pink, grey/gray, purple, teal, lime, etc.
 /// - Hex colors: #ff0000 or 0xff0000
 /// - 256-color numeric: 196
-/// - Background colors: bg:red, bg:#ff0000, bg:196
+/// - Background colors: bg-red, bg-#ff0000, bg-196
 /// - Style tokens: bold, dim, italic, underline
-/// - Combined: bold+red+bg:white
+/// - Combined: bold+red+bg-white
 pub fn parse_style(spec: &str) -> Result<Style> {
     let spec = spec.trim();
     if spec.is_empty() {
@@ -25,7 +25,7 @@ pub fn parse_style(spec: &str) -> Result<Style> {
             bail!("empty token in style specification '{spec}'");
         }
 
-        if let Some(color_spec) = token.strip_prefix("bg:") {
+        if let Some(color_spec) = token.strip_prefix("bg-") {
             style = apply_bg_color(style, color_spec)?;
         } else {
             style = apply_fg_or_effect(style, token)?;
@@ -118,7 +118,7 @@ fn apply_fg_or_effect(style: Style, token: &str) -> Result<Style> {
     )
 }
 
-/// Apply a background color from a color spec (after stripping the bg: prefix).
+/// Apply a background color from a color spec (after stripping the bg- prefix).
 fn apply_bg_color(style: Style, color_spec: &str) -> Result<Style> {
     // Named ANSI 16 colors (background)
     match color_spec {
@@ -346,29 +346,29 @@ mod tests {
 
     #[test]
     fn test_bg_red() {
-        assert_styled("bg:red");
+        assert_styled("bg-red");
     }
 
     #[test]
     fn test_bg_hex() {
-        assert_styled("bg:#ff0000");
+        assert_styled("bg-#ff0000");
     }
 
     #[test]
     fn test_bg_256() {
-        assert_styled("bg:196");
+        assert_styled("bg-196");
     }
 
     // --- Combined with background ---
 
     #[test]
     fn test_red_bg_white() {
-        assert_styled("red+bg:white");
+        assert_styled("red+bg-white");
     }
 
     #[test]
     fn test_bold_red_bg_white() {
-        assert_styled("bold+red+bg:white");
+        assert_styled("bold+red+bg-white");
     }
 
     // --- Extended named colors ---
@@ -428,6 +428,6 @@ mod tests {
 
     #[test]
     fn test_bg_invalid_error() {
-        assert_error("bg:invalid");
+        assert_error("bg-invalid");
     }
 }

@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+REAL_LUX=$(PATH="${PATH#*demo/bin:}" which lux)
+exec "$REAL_LUX" --no-profile "$@"

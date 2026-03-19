@@ -1,0 +1,35 @@
+2026-03-19T08:00:01.123Z INFO  [server] Starting application on port 8080
+2026-03-19T08:00:01.234Z INFO  [db] Connected to PostgreSQL at localhost:5432
+2026-03-19T08:00:01.345Z DEBUG [config] Loaded 12 configuration entries
+2026-03-19T08:00:02.001Z INFO  [server] Listening on 0.0.0.0:8080
+2026-03-19T08:00:05.100Z DEBUG [auth] Token refresh scheduled for user=admin
+2026-03-19T08:00:05.200Z INFO  [api] GET /health 200 1ms
+2026-03-19T08:00:06.300Z INFO  [api] POST /api/users 201 12ms user=admin
+2026-03-19T08:00:07.400Z WARN  [pool] Connection pool at 80% capacity (8/10)
+2026-03-19T08:00:08.500Z DEBUG [cache] Cache hit ratio: 0.87
+2026-03-19T08:00:09.100Z INFO  [api] GET /api/users/42 200 3ms
+2026-03-19T08:00:10.200Z TRACE [sql] SELECT * FROM users WHERE id = 42
+2026-03-19T08:00:10.300Z DEBUG [auth] Session validated for user=admin ttl=3600s
+2026-03-19T08:00:12.400Z INFO  [api] GET /api/orders 200 8ms
+2026-03-19T08:00:13.500Z WARN  [api] Slow query detected: 450ms for /api/reports
+2026-03-19T08:00:14.600Z INFO  [ws] WebSocket connection opened client=10.0.0.5
+2026-03-19T08:00:15.700Z DEBUG [pool] Active connections: 6/10
+2026-03-19T08:00:18.100Z INFO  [api] DELETE /api/sessions/old 204 5ms
+2026-03-19T08:00:20.200Z TRACE [sql] DELETE FROM sessions WHERE expires_at < NOW()
+2026-03-19T08:00:22.300Z WARN  [disk] Disk usage at 85% on /var/log
+2026-03-19T08:00:25.400Z ERROR [api] POST /api/payments 500 234ms - PaymentGatewayTimeout
+  at PaymentService.process (payments.rs:142)
+  at ApiHandler.handle_request (handler.rs:89)
+  at Router.dispatch (router.rs:45)
+2026-03-19T08:00:25.500Z INFO  [api] Retrying payment for order=ORD-9821
+2026-03-19T08:00:26.600Z INFO  [api] POST /api/payments 200 189ms - retry succeeded
+2026-03-19T08:00:30.100Z INFO  [cron] Running scheduled cleanup job
+2026-03-19T08:00:31.200Z DEBUG [cron] Purged 142 expired sessions
+2026-03-19T08:00:35.300Z INFO  [api] GET /api/dashboard 200 15ms
+2026-03-19T08:00:40.400Z ERROR [db] Connection lost to replica-2: timeout after 5000ms
+2026-03-19T08:00:40.500Z WARN  [db] Failover: routing reads to replica-1
+2026-03-19T08:00:41.600Z INFO  [db] Reconnecting to replica-2...
+2026-03-19T08:00:43.700Z INFO  [db] Reconnected to replica-2
+2026-03-19T08:00:45.100Z INFO  [api] GET /api/users 200 4ms
+2026-03-19T08:00:50.200Z DEBUG [metrics] Exported 847 data points to Prometheus
+2026-03-19T08:00:55.300Z INFO  [server] Health check: all systems nominal

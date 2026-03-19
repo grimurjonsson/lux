@@ -122,18 +122,15 @@ pub fn default_rules(offset: usize) -> Vec<Rule> {
         .collect()
 }
 
-/// Build the complete rule set from CLI-provided rules plus defaults.
+/// Build the complete rule set from CLI-provided rules.
 ///
-/// User rules get lower priority numbers (checked first), defaults come after.
+/// User rules get lower priority numbers (checked first).
 pub fn build_rules(cli_rules: &[String]) -> Result<Vec<Rule>> {
     let mut rules = Vec::new();
 
     for (i, rule_str) in cli_rules.iter().enumerate() {
         rules.push(parse_rule(rule_str, i)?);
     }
-
-    let offset = rules.len();
-    rules.extend(default_rules(offset));
 
     Ok(rules)
 }
@@ -213,9 +210,6 @@ pub fn build_rules_with_config(
             offset += 1;
         }
     }
-
-    // Default rules at highest priority numbers (lowest priority)
-    rules.extend(default_rules(offset));
 
     Ok(rules)
 }
@@ -350,18 +344,16 @@ mod tests {
     #[test]
     fn test_build_rules_empty_cli() {
         let rules = build_rules(&[]).unwrap();
-        assert_eq!(rules.len(), 5); // Only defaults
+        assert_eq!(rules.len(), 0); // No default rules
     }
 
     #[test]
-    fn test_build_rules_user_before_defaults() {
+    fn test_build_rules_user_rules_only() {
         let cli_rules = vec!["mypattern:blue".to_string()];
         let rules = build_rules(&cli_rules).unwrap();
-        assert_eq!(rules.len(), 6); // 1 user + 5 defaults
-        assert_eq!(rules[0].priority, 0); // User rule first
+        assert_eq!(rules.len(), 1); // Just the user rule
+        assert_eq!(rules[0].priority, 0);
         assert!(rules[0].pattern.is_match("mypattern"));
-        // Default rules start at priority 1
-        assert_eq!(rules[1].priority, 1);
     }
 
     #[test]
@@ -437,7 +429,7 @@ mod tests {
     #[test]
     fn test_build_with_config_no_config() {
         let rules = build_rules_with_config(&[], None, None, None).unwrap();
-        assert_eq!(rules.len(), 5); // defaults only
+        assert_eq!(rules.len(), 0); // no default rules, no profile
     }
 
     #[test]
@@ -454,11 +446,10 @@ mod tests {
         };
         let cli = vec!["ERROR:red".to_string()];
         let rules = build_rules_with_config(&cli, Some(&config), None, None).unwrap();
-        // 1 CLI + 1 config + 5 defaults = 7
-        assert_eq!(rules.len(), 7);
+        // 1 CLI + 1 config = 2
+        assert_eq!(rules.len(), 2);
         assert_eq!(rules[0].priority, 0); // CLI
         assert_eq!(rules[1].priority, 1); // config
-        assert_eq!(rules[2].priority, 2); // first default
     }
 
     #[test]
@@ -486,8 +477,8 @@ mod tests {
             default_file_mode: None,
         };
         let rules = build_rules_with_config(&[], Some(&config), Some("django"), None).unwrap();
-        // 1 global + 1 profile + 5 defaults = 7
-        assert_eq!(rules.len(), 7);
+        // 1 profile + 1 global = 2
+        assert_eq!(rules.len(), 2);
         assert!(rules[0].pattern.is_match("django"));
         assert!(rules[1].pattern.is_match("GLOBAL"));
     }
