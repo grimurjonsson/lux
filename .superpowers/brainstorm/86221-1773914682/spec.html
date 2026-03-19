@@ -1,0 +1,259 @@
+<h2>Pager (less) Mode for Lux</h2>
+
+<div class="section">
+  <h3>Overview</h3>
+  <p>Add an interactive pager mode to lux that displays files one screen at a time with <code>less</code>-style navigation. The pager reuses lux's existing coloring pipeline (rules, filters, triggers, syntax highlighting, profiles) and renders interactively via ratatui + crossterm.</p>
+  <p style="color: #f9e2af;"><strong>Breaking change:</strong> This changes the default behavior when opening files. Previously <code>lux myfile.log</code> would print and exit (cat mode). Now it opens the interactive pager. Users who prefer the old behavior can run <code>lux config default-file-mode cat</code> or use <code>--cat</code>.</p>
+</div>
+
+<div class="section">
+  <h3>Scope</h3>
+  <div style="display: flex; gap: 24px; flex-wrap: wrap;">
+    <div style="flex: 1; min-width: 250px;">
+      <p class="label">In scope</p>
+      <ul>
+        <li>File-based paging</li>
+        <li>Keyboard/mouse navigation</li>
+        <li>Configurable default mode</li>
+        <li>Status bar</li>
+        <li>Alternate screen</li>
+        <li>CLI subcommand for config</li>
+      </ul>
+    </div>
+    <div style="flex: 1; min-width: 250px;">
+      <p class="label">Out of scope</p>
+      <ul>
+        <li>Stdin paging</li>
+        <li>In-file search</li>
+        <li>Horizontal scrolling</li>
+        <li>Line wrapping configuration</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Activation &amp; Mode Resolution</h3>
+
+  <p class="label">CLI Flags</p>
+  <table style="width: 100%; border-collapse: collapse; margin-bottom: 16px;">
+    <thead>
+      <tr style="border-bottom: 2px solid #45475a;">
+        <th style="text-align: left; padding: 8px; color: #89b4fa;">Flag</th>
+        <th style="text-align: left; padding: 8px; color: #89b4fa;">Effect</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr style="border-bottom: 1px solid #313244;">
+        <td style="padding: 8px;"><code>--less</code></td>
+        <td style="padding: 8px;">Force pager mode</td>
+      </tr>
+      <tr style="border-bottom: 1px solid #313244;">
+        <td style="padding: 8px;"><code>--cat</code></td>
+        <td style="padding: 8px;">Force print-and-exit mode</td>
+      </tr>
+      <tr style="border-bottom: 1px solid #313244;">
+        <td style="padding: 8px;"><code>-f</code></td>
+        <td style="padding: 8px;">Follow file by descriptor (existing)</td>
+      </tr>
+      <tr style="border-bottom: 1px solid #313244;">
+        <td style="padding: 8px;"><code>-F</code></td>
+        <td style="padding: 8px;">Follow file by name (existing)</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>All four flags conflict with each other (enforced by clap).</p>
+
+  <p class="label" style="margin-top: 16px;">Mode Resolution Order</p>
+  <ol>
+    <li>Piped stdin → always stream (no pager, same as today)</li>
+    <li><code>--less</code> flag → pager</li>
+    <li><code>--cat</code> flag → print-and-exit</li>
+    <li><code>-f</code> / <code>-F</code> flag → follow</li>
+    <li>Config <code>default_file_mode</code> → <code>"less"</code> or <code>"cat"</code></li>
+    <li>No config → <code>"less"</code> (pager is the default)</li>
+  </ol>
+</div>
+
+<div class="section">
+  <h3>Configuration</h3>
+
+  <p class="label">Config file (~/.config/lux/config.toml)</p>
+  <div class="mockup">
+    <div class="mockup-body" style="font-family: monospace; font-size: 13px; background: #1e1e2e; color: #cdd6f4; padding: 16px; white-space: pre; overflow-x: auto;">default_file_mode = "less"  <span style="color: #6c7086;"># or "cat"</span></div>
+  </div>
+
+  <p class="label" style="margin-top: 16px;">CLI subcommand</p>
+  <div class="mockup">
+    <div class="mockup-body" style="font-family: monospace; font-size: 13px; background: #1e1e2e; color: #cdd6f4; padding: 16px; white-space: pre; overflow-x: auto;">lux config default-file-mode less
+lux config default-file-mode cat</div>
+  </div>
+
+  <p style="margin-top: 12px;">Writes the setting to the config file, creating it if needed. Same pattern as <code>lux profile set-default</code>.</p>
+
+  <p><strong>Implementation notes:</strong></p>
+  <ul>
+    <li>New <code>Command::Config</code> variant with a <code>DefaultFileMode</code> action in <code>cli.rs</code></li>
+    <li>New <code>default_file_mode: Option&lt;String&gt;</code> field in the <code>Config</code> struct in <code>config.rs</code></li>
+  </ul>
+
+  <p class="label" style="margin-top: 16px;">Interaction with -n flag</p>
+  <p>The <code>-n</code> flag is ignored in pager mode. The entire file is always loaded, and the pager starts at the top. In cat mode, <code>-n</code> continues to work as before.</p>
+</div>
+
+<div class="section">
+  <h3>Architecture</h3>
+
+  <p class="label">New module: pager.rs</p>
+  <div class="mockup">
+    <div class="mockup-header">pager.rs entry point</div>
+    <div class="mockup-body" style="font-family: monospace; font-size: 13px; background: #1e1e2e; color: #cdd6f4; padding: 16px; white-space: pre; overflow-x: auto;"><span style="color: #cba6f7;">pub fn</span> <span style="color: #a6e3a1;">run</span>(
+    file: <span style="color: #f9e2af;">&amp;Path</span>,
+    engine: <span style="color: #f9e2af;">&amp;Engine</span>,
+    filter: <span style="color: #f9e2af;">&amp;LineFilter</span>,
+    trigger: <span style="color: #f9e2af;">&amp;mut TriggerFilter</span>,
+    profile_name: <span style="color: #f9e2af;">Option&lt;&amp;str&gt;</span>,
+    rule_count: <span style="color: #f9e2af;">usize</span>,
+) -> <span style="color: #f9e2af;">Result&lt;()&gt;</span></div>
+  </div>
+
+  <p class="label" style="margin-top: 16px;">Data flow</p>
+  <ol>
+    <li>Read all lines from the file</li>
+    <li>Pass lines through existing pipeline: <code>LineFilter</code> → <code>Engine::apply()</code> → <code>TriggerFilter</code></li>
+    <li>Convert ANSI-colored strings to ratatui <code>Line</code> objects via <code>Line::from_ansi()</code></li>
+    <li>Enter alternate screen, enable raw mode, enable mouse capture</li>
+    <li>Run event loop: render visible slice + status bar, handle input</li>
+    <li>On quit: disable mouse capture, leave alternate screen, disable raw mode</li>
+  </ol>
+  <p>When triggers are active (<code>-t</code>), the pager shows only the trigger context windows (same filtering as cat mode). The user scrolls through the already-filtered output.</p>
+
+  <p class="label" style="margin-top: 16px;">Integration with existing code</p>
+  <p>The pager reuses the same <code>Engine</code>, <code>LineFilter</code>, <code>TriggerFilter</code>, and profile/rule resolution that cat and follow modes use. The shared pipeline in <code>main.rs</code> is unchanged. After building the pipeline, <code>main.rs</code> dispatches to <code>pager::run()</code> instead of the print-and-exit path.</p>
+  <p>The no-args help guard in <code>main.rs</code> needs updating to account for <code>--less</code> and <code>--cat</code> flags.</p>
+</div>
+
+<div class="section">
+  <h3>Navigation</h3>
+
+  <div style="display: flex; gap: 24px; flex-wrap: wrap;">
+    <div style="flex: 1; min-width: 280px;">
+      <p class="label">Key bindings</p>
+      <table style="width: 100%; border-collapse: collapse;">
+        <thead>
+          <tr style="border-bottom: 2px solid #45475a;">
+            <th style="text-align: left; padding: 8px; color: #89b4fa;">Key</th>
+            <th style="text-align: left; padding: 8px; color: #89b4fa;">Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr style="border-bottom: 1px solid #313244;"><td style="padding: 8px;"><code>Space</code></td><td style="padding: 8px;">Page down</td></tr>
+          <tr style="border-bottom: 1px solid #313244;"><td style="padding: 8px;"><code>b</code></td><td style="padding: 8px;">Page up</td></tr>
+          <tr style="border-bottom: 1px solid #313244;"><td style="padding: 8px;"><code>j</code> / <code>↓</code></td><td style="padding: 8px;">Scroll down 1 line</td></tr>
+          <tr style="border-bottom: 1px solid #313244;"><td style="padding: 8px;"><code>k</code> / <code>↑</code></td><td style="padding: 8px;">Scroll up 1 line</td></tr>
+          <tr style="border-bottom: 1px solid #313244;"><td style="padding: 8px;"><code>g</code></td><td style="padding: 8px;">Go to top</td></tr>
+          <tr style="border-bottom: 1px solid #313244;"><td style="padding: 8px;"><code>G</code></td><td style="padding: 8px;">Go to bottom</td></tr>
+          <tr style="border-bottom: 1px solid #313244;"><td style="padding: 8px;"><code>q</code></td><td style="padding: 8px;">Quit</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div style="flex: 1; min-width: 280px;">
+      <p class="label">Mouse</p>
+      <table style="width: 100%; border-collapse: collapse;">
+        <thead>
+          <tr style="border-bottom: 2px solid #45475a;">
+            <th style="text-align: left; padding: 8px; color: #89b4fa;">Input</th>
+            <th style="text-align: left; padding: 8px; color: #89b4fa;">Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr style="border-bottom: 1px solid #313244;"><td style="padding: 8px;">Scroll wheel down</td><td style="padding: 8px;">Scroll down 3 lines</td></tr>
+          <tr style="border-bottom: 1px solid #313244;"><td style="padding: 8px;">Scroll wheel up</td><td style="padding: 8px;">Scroll up 3 lines</td></tr>
+        </tbody>
+      </table>
+
+      <p class="label" style="margin-top: 16px;">Terminal resize</p>
+      <p>Listens for <code>Resize</code> events and updates content area dimensions automatically.</p>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Rendering</h3>
+
+  <p class="label">Screen layout</p>
+  <div class="mockup">
+    <div class="mockup-body" style="font-family: monospace; font-size: 13px; background: #1e1e2e; color: #cdd6f4; padding: 20px; white-space: pre; overflow-x: auto; line-height: 1.5;"><span style="color: #f38ba8;">2024-03-19 ERROR Connection refused</span>                  <span style="color: #6c7086;">← content_area</span>
+<span style="color: #a6e3a1;">2024-03-19 INFO  Server started on :8080</span>               <span style="color: #6c7086;">   Constraint::Min(1)</span>
+<span style="color: #f9e2af;">2024-03-19 WARN  Slow query (2.3s)</span>                     <span style="color: #6c7086;">   No border, no Block</span>
+2024-03-19 DEBUG Processing request #4521               <span style="color: #6c7086;">   Bare Paragraph widget</span>
+<span style="color: #a6e3a1;">2024-03-19 INFO  Request completed 200 OK</span>
+
+<span style="background: #313244; color: #bac2de;"> <span style="color: #89b4fa;">app.log</span> <span style="color: #6c7086;">│</span> profile: <span style="color: #f9e2af;">logs</span> <span style="color: #6c7086;">│</span> 3 rules    42-67/1204 (5%) <span style="color: #6c7086;">q:quit Space:next b:prev</span> </span>  <span style="color: #6c7086;">← status_area</span>
+                                                        <span style="color: #6c7086;">   Constraint::Length(1)</span></div>
+  </div>
+
+  <p class="label" style="margin-top: 16px;">Line wrapping</p>
+  <p>Lines wrap at terminal width (ratatui Paragraph default). Page-down/page-up scroll by logical lines. The status bar reports logical line numbers.</p>
+
+  <p class="label" style="margin-top: 16px;">ANSI integration</p>
+  <p>Lux's <code>Engine::apply()</code> returns ANSI-escaped strings. These are converted to ratatui <code>Line</code> objects using <code>Line::from_ansi()</code>, which requires the <code>ansi</code> feature flag on the ratatui crate.</p>
+  <ul>
+    <li>Engine's coloring logic is completely unchanged</li>
+    <li>All color modes (TrueColor, 256, 16) work as-is</li>
+    <li>Syntax highlighting layers work as-is</li>
+    <li>Rule priority and span-based overlapping work as-is</li>
+  </ul>
+  <p>Color mode is resolved before the pager starts. Since the pager is only active when stdout is a terminal, auto-detection works correctly. <code>--color never</code> disables coloring as expected.</p>
+  <p>Lines are colorized once on load and cached as <code>Vec&lt;Line&gt;</code>. The draw loop renders only the visible slice.</p>
+
+  <p class="label" style="margin-top: 16px;">Alternate screen</p>
+  <p>Enters crossterm's alternate screen on start and restores on quit. Terminal scrollback is untouched.</p>
+</div>
+
+<div class="section">
+  <h3>Dependencies</h3>
+
+  <table style="width: 100%; border-collapse: collapse;">
+    <thead>
+      <tr style="border-bottom: 2px solid #45475a;">
+        <th style="text-align: left; padding: 8px; color: #89b4fa;">Crate</th>
+        <th style="text-align: left; padding: 8px; color: #89b4fa;">Purpose</th>
+        <th style="text-align: left; padding: 8px; color: #89b4fa;">Features</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr style="border-bottom: 1px solid #313244;">
+        <td style="padding: 8px;"><code>ratatui</code></td>
+        <td style="padding: 8px;">TUI framework (rendering, layout, widgets)</td>
+        <td style="padding: 8px;"><code>crossterm</code>, <code>ansi</code></td>
+      </tr>
+      <tr style="border-bottom: 1px solid #313244;">
+        <td style="padding: 8px;"><code>crossterm</code></td>
+        <td style="padding: 8px;">Terminal I/O (raw mode, events, alternate screen)</td>
+        <td style="padding: 8px;">—</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>Both are new direct dependencies. All existing crates unchanged.</p>
+</div>
+
+<div class="section">
+  <h3>Error Handling</h3>
+  <ul>
+    <li>If the terminal doesn't support alternate screen or raw mode, fall back to cat mode with a warning</li>
+    <li>Cleanup (leave alternate screen, disable raw mode) runs even on panic via a drop guard</li>
+    <li>File read errors surface as <code>anyhow::Result</code> before entering the pager</li>
+  </ul>
+</div>
+
+<div class="section">
+  <h3>Future Extensions (not in this spec)</h3>
+  <ul>
+    <li>Stdin paging via temp-file buffer</li>
+    <li>In-file search (<code>/pattern</code>, <code>n</code>/<code>N</code>)</li>
+    <li>Horizontal scrolling for long lines</li>
+    <li>Interactive filter toggling</li>
+    <li>Line number gutter</li>
+  </ul>
+</div>

@@ -5,6 +5,7 @@ pub mod engine;
 pub mod filter;
 pub mod follow;
 pub mod output;
+pub mod pager;
 pub mod rules;
 pub mod syntax;
 pub mod tail;

@@ -1,6 +1,9 @@
 default:
     @just --list
 
+build-install: build install
+    @echo "Done."
+
 # Build release binary
 build:
     cargo build --release
@@ -253,18 +256,19 @@ generate-changelog-test:
     TLDR=""
     if command -v claude &> /dev/null && [ -n "$CHANGES" ]; then
         echo "=== Generating TL;DR with Claude... ==="
-        PROMPT="Write a concise TL;DR for these changelog commits. Focus only on user-facing changes. No quotes or prefix. Commits: $CHANGES"
+        PROMPT="Write a concise TL;DR (one sentence) for these changelog commits. Focus only on user-facing changes. No quotes or prefix. Commits: $CHANGES"
         TLDR=$(claude -p "$PROMPT" 2>/dev/null || true)
         echo "TL;DR: $TLDR"
         echo ""
     else
-        echo "=== Claude not available, skipping TL;DR ==="
+        echo "=== Claude not available or no changes, skipping TL;DR ==="
         echo ""
     fi
 
     ADDED=$(echo "$CHANGES" | grep -iE '^- (feat|add)' | sed 's/^- [Ff][Ee][Aa][Tt][:(] */- /; s/^- [Aa][Dd][Dd][:(] */- /' || true)
     FIXED=$(echo "$CHANGES" | grep -iE '^- fix' | sed 's/^- [Ff][Ii][Xx][:(] */- /' || true)
     CHANGED=$(echo "$CHANGES" | grep -iE '^- (refactor|change|update)' | sed 's/^- [Rr][Ee][Ff][Aa][Cc][Tt][Oo][Rr][:(] */- /; s/^- [Cc][Hh][Aa][Nn][Gg][Ee][:(] */- /; s/^- [Uu][Pp][Dd][Aa][Tt][Ee][:(] */- /' || true)
+    OTHER=$(echo "$CHANGES" | grep -ivE '^- (feat|add|fix|refactor|change|update)' | grep -v '^$' || true)
 
     echo "=== Generated changelog entry ==="
     echo "## [$VERSION] - $TODAY"
@@ -285,6 +289,11 @@ generate-changelog-test:
     if [ -n "$CHANGED" ]; then
         echo "### Changed"
         echo "$CHANGED"
+        echo ""
+    fi
+    if [ -n "$OTHER" ]; then
+        echo "### Other"
+        echo "$OTHER"
         echo ""
     fi
 
@@ -319,15 +328,22 @@ _release bump msg="":
             CHANGES=$(git log --pretty=format:"- %s" --no-merges | grep -v "^- Release v" || true)
         fi
 
+        # If no commits found but a release message was provided, use it
+        if [ -z "$CHANGES" ] && [ -n "{{ msg }}" ]; then
+            CHANGES="- {{ msg }}"
+        fi
+
         TLDR=""
         if command -v claude &> /dev/null && [ -n "$CHANGES" ]; then
-            PROMPT="Write a concise TL;DR for these changelog commits. Focus only on user-facing changes. No quotes or prefix. Commits: $CHANGES"
+            PROMPT="Write a concise TL;DR (one sentence) for these changelog commits. Focus only on user-facing changes. No quotes or prefix. Commits: $CHANGES"
             TLDR=$(claude -p "$PROMPT" 2>/dev/null || true)
         fi
 
         ADDED=$(echo "$CHANGES" | grep -iE '^- (feat|add)' | sed 's/^- [Ff][Ee][Aa][Tt][:(] */- /; s/^- [Aa][Dd][Dd][:(] */- /' || true)
         FIXED=$(echo "$CHANGES" | grep -iE '^- fix' | sed 's/^- [Ff][Ii][Xx][:(] */- /' || true)
         CHANGED=$(echo "$CHANGES" | grep -iE '^- (refactor|change|update)' | sed 's/^- [Rr][Ee][Ff][Aa][Cc][Tt][Oo][Rr][:(] */- /; s/^- [Cc][Hh][Aa][Nn][Gg][Ee][:(] */- /; s/^- [Uu][Pp][Dd][Aa][Tt][Ee][:(] */- /' || true)
+        # Catch uncategorized commits (don't match feat/add/fix/refactor/change/update)
+        OTHER=$(echo "$CHANGES" | grep -ivE '^- (feat|add|fix|refactor|change|update)' | grep -v '^$' || true)
 
         TMPFILE=$(mktemp)
         printf '%s\n' "## [$NEW_VERSION] - $TODAY" >> "$TMPFILE"
@@ -346,6 +362,11 @@ _release bump msg="":
 
         if [ -n "$CHANGED" ]; then
             printf '%s\n%s\n\n' "### Changed" "$CHANGED" >> "$TMPFILE"
+        fi
+
+        # Include uncategorized commits so nothing is silently dropped
+        if [ -n "$OTHER" ]; then
+            printf '%s\n%s\n\n' "### Other" "$OTHER" >> "$TMPFILE"
         fi
 
         HEADER_END=$(grep -n '^\#\# \[' "$CHANGELOG_FILE" | head -1 | cut -d: -f1)

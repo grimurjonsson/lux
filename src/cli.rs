@@ -52,6 +52,14 @@ pub struct Cli {
     #[arg(short = 'F', conflicts_with = "follow_descriptor")]
     pub follow_name: bool,
 
+    /// Open file in interactive pager mode (like less)
+    #[arg(long, conflicts_with_all = ["follow_descriptor", "follow_name", "cat"])]
+    pub less: bool,
+
+    /// Print file and exit (non-interactive, overrides default pager mode)
+    #[arg(long, conflicts_with_all = ["follow_descriptor", "follow_name", "less"])]
+    pub cat: bool,
+
     /// Number of lines to show (e.g. "10", "+5" for from-line)
     #[arg(short = 'n')]
     pub lines: Option<String>,
@@ -109,6 +117,11 @@ pub enum Command {
     },
     /// Check for updates and upgrade interactively
     Update,
+    /// Manage lux configuration
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -154,6 +167,15 @@ pub enum ProfileAction {
         /// Path to a custom config file (overrides XDG discovery)
         #[arg(long)]
         config: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ConfigAction {
+    /// Set the default file mode (less = pager, cat = print-and-exit)
+    DefaultFileMode {
+        /// Mode: "less" or "cat"
+        value: String,
     },
 }
 
@@ -415,5 +437,54 @@ mod tests {
     fn test_update_subcommand() {
         let cli = Cli::try_parse_from(["lux", "update"]).unwrap();
         assert!(matches!(cli.command, Some(Command::Update)));
+    }
+
+    #[test]
+    fn test_less_flag() {
+        let cli = Cli::try_parse_from(["lux", "--less", "app.log"]).unwrap();
+        assert!(cli.less);
+        assert_eq!(cli.file.as_deref(), Some("app.log"));
+    }
+
+    #[test]
+    fn test_cat_flag() {
+        let cli = Cli::try_parse_from(["lux", "--cat", "app.log"]).unwrap();
+        assert!(cli.cat);
+        assert_eq!(cli.file.as_deref(), Some("app.log"));
+    }
+
+    #[test]
+    fn test_less_conflicts_with_follow_descriptor() {
+        let result = Cli::try_parse_from(["lux", "--less", "-f", "app.log"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_less_conflicts_with_follow_name() {
+        let result = Cli::try_parse_from(["lux", "--less", "-F", "app.log"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_less_conflicts_with_cat() {
+        let result = Cli::try_parse_from(["lux", "--less", "--cat", "app.log"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cat_conflicts_with_follow_descriptor() {
+        let result = Cli::try_parse_from(["lux", "--cat", "-f", "app.log"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_config_default_file_mode_subcommand() {
+        let cli = Cli::try_parse_from(["lux", "config", "default-file-mode", "less"]).unwrap();
+        match cli.command {
+            Some(Command::Config { action: ConfigAction::DefaultFileMode { value } }) => {
+                assert_eq!(value, "less");
+            }
+            _ => panic!("expected Config DefaultFileMode"),
+        }
     }
 }

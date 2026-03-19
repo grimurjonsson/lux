@@ -1,0 +1,65 @@
+<h2>Status bar layout</h2>
+<p class="subtitle">What should the bottom of the pager screen look like?</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Minimal (less-style)</h3>
+      <div class="mockup" style="margin-top: 12px;">
+        <div class="mockup-body" style="font-family: monospace; font-size: 13px; background: #1e1e2e; color: #cdd6f4; padding: 16px;">
+          <div style="color: #f38ba8;">2024-03-19 ERROR Connection refused</div>
+          <div style="color: #a6e3a1;">2024-03-19 INFO  Server started on :8080</div>
+          <div style="color: #f9e2af;">2024-03-19 WARN  Slow query detected (2.3s)</div>
+          <div style="color: #cdd6f4;">2024-03-19 DEBUG Processing request #4521</div>
+          <div style="color: #a6e3a1;">2024-03-19 INFO  Request completed 200 OK</div>
+          <div style="height: 8px;"></div>
+          <div style="background: #313244; color: #bac2de; padding: 4px 8px; margin: -16px; margin-top: 0;">
+            myfile.log (line 42-67/1204) 5%
+          </div>
+        </div>
+      </div>
+      <p style="margin-top:8px;">Just filename, line range, and percentage. Clean and familiar.</p>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Informative</h3>
+      <div class="mockup" style="margin-top: 12px;">
+        <div class="mockup-body" style="font-family: monospace; font-size: 13px; background: #1e1e2e; color: #cdd6f4; padding: 16px;">
+          <div style="color: #f38ba8;">2024-03-19 ERROR Connection refused</div>
+          <div style="color: #a6e3a1;">2024-03-19 INFO  Server started on :8080</div>
+          <div style="color: #f9e2af;">2024-03-19 WARN  Slow query detected (2.3s)</div>
+          <div style="color: #cdd6f4;">2024-03-19 DEBUG Processing request #4521</div>
+          <div style="color: #a6e3a1;">2024-03-19 INFO  Request completed 200 OK</div>
+          <div style="height: 8px;"></div>
+          <div style="background: #313244; color: #bac2de; padding: 4px 8px; margin: -16px; margin-top: 0; display: flex; justify-content: space-between;">
+            <span><span style="color: #89b4fa;">myfile.log</span> <span style="color: #6c7086;">|</span> profile: <span style="color: #f9e2af;">logs</span> <span style="color: #6c7086;">|</span> 3 rules</span>
+            <span>42-67/1204 (5%) <span style="color: #6c7086;">q:quit Space:next b:prev</span></span>
+          </div>
+        </div>
+      </div>
+      <p style="margin-top:8px;">Shows active profile, rule count, and key hints. More discoverable.</p>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>No status bar</h3>
+      <div class="mockup" style="margin-top: 12px;">
+        <div class="mockup-body" style="font-family: monospace; font-size: 13px; background: #1e1e2e; color: #cdd6f4; padding: 16px;">
+          <div style="color: #f38ba8;">2024-03-19 ERROR Connection refused</div>
+          <div style="color: #a6e3a1;">2024-03-19 INFO  Server started on :8080</div>
+          <div style="color: #f9e2af;">2024-03-19 WARN  Slow query detected (2.3s)</div>
+          <div style="color: #cdd6f4;">2024-03-19 DEBUG Processing request #4521</div>
+          <div style="color: #a6e3a1;">2024-03-19 INFO  Request completed 200 OK</div>
+          <div style="color: #cdd6f4;">2024-03-19 DEBUG Flushing write buffer</div>
+        </div>
+      </div>
+      <p style="margin-top:8px;">Maximum content area. No chrome. Exit with q, figure out the rest.</p>
+    </div>
+  </div>
+</div>

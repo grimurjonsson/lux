@@ -64,6 +64,9 @@ pub struct Config {
     /// Update behavior: "notify", "auto", or "disabled". None = first-time prompt.
     #[serde(default)]
     pub update_mode: Option<String>,
+    /// Default file mode: "less" (pager) or "cat" (print-and-exit). None = "less".
+    #[serde(default)]
+    pub default_file_mode: Option<String>,
 }
 
 /// Return the default config file path using XDG_CONFIG_HOME or $HOME/.config.
@@ -936,6 +939,7 @@ lines = "+1"
             syntax_map: HashMap::new(),
             update_check_interval_days: 7,
             update_mode: None,
+            default_file_mode: None,
             profiles: {
                 let mut p = HashMap::new();
                 p.insert(
@@ -995,6 +999,26 @@ lines = "+1"
 
         unsafe { restore_env("XDG_CONFIG_HOME", prev_xdg) };
         unsafe { restore_env("HOME", prev_home) };
+    }
+
+    #[test]
+    fn config_default_file_mode_deserialized() {
+        let tmp = TempDir::new().unwrap();
+        let config_path = tmp.path().join("config.toml");
+        std::fs::write(&config_path, "default_file_mode = \"less\"\n").unwrap();
+
+        let (config, _) = load_config(Some(&config_path)).unwrap().unwrap();
+        assert_eq!(config.default_file_mode.as_deref(), Some("less"));
+    }
+
+    #[test]
+    fn config_default_file_mode_none_when_omitted() {
+        let tmp = TempDir::new().unwrap();
+        let config_path = tmp.path().join("config.toml");
+        std::fs::write(&config_path, "[[rules]]\npattern = \"x\"\nstyle = \"red\"\n").unwrap();
+
+        let (config, _) = load_config(Some(&config_path)).unwrap().unwrap();
+        assert!(config.default_file_mode.is_none());
     }
 
     #[test]
