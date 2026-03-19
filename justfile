@@ -220,14 +220,14 @@ build-release-binaries:
     echo ""
     echo "Upload these to your GitHub release"
 
-# Bump patch version (0.1.0 → 0.1.1)
-release-patch msg="": (_release "patch" msg)
+# Bump patch version (0.1.0 → 0.1.1). Pass -y to skip prompts.
+release-patch msg="" *flags="": (_release "patch" msg flags)
 
-# Bump minor version (0.1.0 → 0.2.0)
-release-minor msg="": (_release "minor" msg)
+# Bump minor version (0.1.0 → 0.2.0). Pass -y to skip prompts.
+release-minor msg="" *flags="": (_release "minor" msg flags)
 
-# Bump major version (0.1.0 → 1.0.0)
-release-major msg="": (_release "major" msg)
+# Bump major version (0.1.0 → 1.0.0). Pass -y to skip prompts.
+release-major msg="" *flags="": (_release "major" msg flags)
 
 # Test changelog generation (dry-run, prints to stdout)
 generate-changelog-test:
@@ -297,9 +297,25 @@ generate-changelog-test:
         echo ""
     fi
 
-_release bump msg="":
+_release bump msg="" *flags="":
     #!/usr/bin/env bash
     set -euo pipefail
+
+    AUTO_YES=false
+    for flag in {{ flags }}; do
+        case "$flag" in
+            -y|--yes) AUTO_YES=true ;;
+        esac
+    done
+
+    confirm() {
+        if [ "$AUTO_YES" = true ]; then
+            return 0
+        fi
+        read -p "$1 [Y/n] " -n 1 -r
+        echo
+        [[ ! $REPLY =~ ^[Nn]$ ]]
+    }
 
     VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
     IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
@@ -384,9 +400,7 @@ _release bump msg="":
     # Update Cargo.lock with new version
     cargo check --quiet
 
-    read -p "Create release branch, commit, and tag? [Y/n] " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+    if confirm "Create release branch, commit, and tag?"; then
         git checkout -b "$RELEASE_BRANCH"
         echo "✓ Created branch $RELEASE_BRANCH"
 
@@ -402,9 +416,7 @@ _release bump msg="":
         git tag "v$NEW_VERSION"
         echo "✓ Created commit and tag v$NEW_VERSION"
 
-        read -p "Push branch and tag, then create PR? [Y/n] " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+        if confirm "Push branch and tag, then create PR?"; then
             git push -u origin "$RELEASE_BRANCH"
             git push origin "v$NEW_VERSION"
             echo "✓ Pushed branch and tag to origin"
@@ -413,9 +425,7 @@ _release bump msg="":
             echo ""
 
             if command -v gh &> /dev/null; then
-                read -p "Create PR to merge release branch to main? [Y/n] " -n 1 -r
-                echo
-                if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+                if confirm "Create PR to merge release branch to main?"; then
                     PR_BODY="Release v$NEW_VERSION
 
     This PR merges the release commit and updates:
@@ -431,9 +441,7 @@ _release bump msg="":
                     echo "✓ Created PR: $PR_URL"
                     echo ""
 
-                    read -p "Merge the PR now? [Y/n] " -n 1 -r
-                    echo
-                    if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+                    if confirm "Merge the PR now?"; then
                         gh pr merge "$RELEASE_BRANCH" --merge --delete-branch
                         echo "✓ PR merged and release branch deleted"
                         git checkout main
