@@ -620,8 +620,8 @@ fn ask_rule_interactive_inner(
         } else {
             input.clone()
         };
-        // Validate with bg: prefix
-        let bg_spec = format!("bg:{color_name}");
+        // Validate with bg- prefix
+        let bg_spec = format!("bg-{color_name}");
         if color::parse_style(&bg_spec).is_ok() {
             break Some(bg_spec);
         }
@@ -1238,7 +1238,7 @@ mod tests {
         assert!(result.is_ok(), "Got error: {:?}", result.unwrap_err());
         let rule = result.unwrap().expect("expected Some rule");
         assert_eq!(rule.0, "WARN");
-        assert_eq!(rule.1, "bold+italic+yellow+bg:blue");
+        assert_eq!(rule.1, "bold+italic+yellow+bg-blue");
         assert_eq!(rule.2, "match");
     }
 

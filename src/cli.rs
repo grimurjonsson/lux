@@ -20,6 +20,10 @@ pub struct Cli {
     #[arg(short = 'p', long)]
     pub profile: Option<String>,
 
+    /// Disable automatic profile and syntax highlighting (only explicit -r rules apply)
+    #[arg(long, alias = "plain", conflicts_with = "profile")]
+    pub no_profile: bool,
+
     /// Path to a custom config file (overrides XDG discovery)
     #[arg(long)]
     pub config: Option<String>,
@@ -56,7 +60,7 @@ pub struct Cli {
     #[arg(long, conflicts_with_all = ["follow_descriptor", "follow_name", "cat"])]
     pub less: bool,
 
-    /// Print file and exit (non-interactive, overrides default pager mode)
+    /// Print file and exit (non-interactive, this is the default)
     #[arg(long, conflicts_with_all = ["follow_descriptor", "follow_name", "less"])]
     pub cat: bool,
 

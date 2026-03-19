@@ -148,9 +148,12 @@ fn run() -> anyhow::Result<()> {
         }
     }
 
-    // Determine active profile: explicit --profile > extension auto-select > content sniff > default_profile > None
+    // Determine active profile: --no-profile disables all auto-detection;
+    // otherwise: explicit --profile > extension auto-select > content sniff > default_profile > None
     let mut stdin_buffer: Vec<String> = Vec::new();
-    let active_profile_name: Option<String> = if cli.profile.is_some() {
+    let active_profile_name: Option<String> = if cli.no_profile {
+        None
+    } else if cli.profile.is_some() {
         cli.profile.clone()
     } else if let Some(ref file_path) = cli.file {
         // Auto-select profile by file extension
@@ -173,9 +176,13 @@ fn run() -> anyhow::Result<()> {
         None
     }
     .or_else(|| {
-        config
-            .as_ref()
-            .and_then(|(cfg, _)| cfg.default_profile.clone())
+        if cli.no_profile {
+            None
+        } else {
+            config
+                .as_ref()
+                .and_then(|(cfg, _)| cfg.default_profile.clone())
+        }
     });
 
     // Look up the active profile config
@@ -192,15 +199,19 @@ fn run() -> anyhow::Result<()> {
 
     // Create syntect highlighter for the file
     // Theme priority: --theme CLI flag > config.toml theme > default (Catppuccin Mocha)
-    let syntax_highlighter = cli.file.as_ref().and_then(|file_path| {
-        let path = std::path::Path::new(file_path);
-        let theme = cli.theme.as_deref()
-            .or_else(|| config.as_ref().and_then(|(c, _)| c.theme.as_deref()));
-        let syntax_map = config.as_ref()
-            .map(|(c, _)| &c.syntax_map)
-            .filter(|m| !m.is_empty());
-        SyntaxHighlighter::for_file(path, theme, syntax_map)
-    });
+    let syntax_highlighter = if cli.no_profile {
+        None
+    } else {
+        cli.file.as_ref().and_then(|file_path| {
+            let path = std::path::Path::new(file_path);
+            let theme = cli.theme.as_deref()
+                .or_else(|| config.as_ref().and_then(|(c, _)| c.theme.as_deref()));
+            let syntax_map = config.as_ref()
+                .map(|(c, _)| &c.syntax_map)
+                .filter(|m| !m.is_empty());
+            SyntaxHighlighter::for_file(path, theme, syntax_map)
+        })
+    };
 
     let engine = Engine::new(rules, color_mode.color_enabled(), syntax_highlighter);
 
@@ -252,7 +263,7 @@ fn run() -> anyhow::Result<()> {
 
         let has_follow_flag = cli.follow_descriptor || cli.follow_name;
 
-        // Mode resolution: --less > --cat > -f/-F > config default > "less"
+        // Mode resolution: --less > --cat > -f/-F > config default > "cat"
         let use_pager = if cli.less {
             true
         } else if cli.cat || has_follow_flag {
@@ -261,7 +272,7 @@ fn run() -> anyhow::Result<()> {
             // Check config default_file_mode
             config.as_ref()
                 .and_then(|(c, _)| c.default_file_mode.as_deref())
-                .unwrap_or("less") == "less"
+                .unwrap_or("cat") == "less"
         };
 
         let is_print_and_exit = !has_follow_flag && !use_pager;

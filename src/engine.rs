@@ -239,27 +239,11 @@ mod tests {
     }
 
     #[test]
-    fn test_default_rules_error_case_insensitive() {
+    fn test_no_rules_no_coloring() {
         let rules = build_rules(&[]).unwrap();
         let engine = Engine::new(rules, true, None);
         let result = engine.apply("error happened");
-        assert_ne!(result, "error happened");
-    }
-
-    #[test]
-    fn test_default_rules_warn() {
-        let rules = build_rules(&[]).unwrap();
-        let engine = Engine::new(rules, true, None);
-        let result = engine.apply("WARNING: disk full");
-        assert_ne!(result, "WARNING: disk full");
-    }
-
-    #[test]
-    fn test_default_rules_debug() {
-        let rules = build_rules(&[]).unwrap();
-        let engine = Engine::new(rules, true, None);
-        let result = engine.apply("DEBUG: entering fn");
-        assert_ne!(result, "DEBUG: entering fn");
+        assert_eq!(result, "error happened");
     }
 
     // === New span-based coloring tests ===
