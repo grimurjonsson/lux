@@ -33,6 +33,11 @@ impl Engine {
         }
     }
 
+    /// Return the number of rules in this engine.
+    pub fn rule_count(&self) -> usize {
+        self.rules.len()
+    }
+
     /// Apply rules to a line of text. Returns the styled line.
     ///
     /// Each matching rule produces spans based on its scope:

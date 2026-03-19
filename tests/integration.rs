@@ -553,13 +553,13 @@ fn make_temp_log(content: &str) -> (TempDir, std::path::PathBuf) {
 
 #[test]
 fn print_and_exit_last_n() {
-    // lux -n 5 <file> should print 5 lines and exit (NOT block)
+    // lux --cat -n 5 <file> should print 5 lines and exit (NOT block)
     // Use StdCommand with null stdin to avoid piped-stdin conflict detection
     let lines: String = (1..=20).map(|i| format!("line {i}\n")).collect();
     let (_dir, path) = make_temp_log(&lines);
 
     let output = StdCommand::new(lux_bin())
-        .args(["-n", "5", "--color", "never"])
+        .args(["--cat", "-n", "5", "--color", "never"])
         .arg(path.to_str().unwrap())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -654,11 +654,12 @@ fn follow_reads_new_lines() {
 
 #[test]
 fn bare_file_prints_and_exits() {
-    // lux <file> (no flags) should print the whole file and exit (not follow)
+    // lux --cat <file> should print the whole file and exit (not follow, not pager)
     let lines: String = (1..=30).map(|i| format!("line {i}\n")).collect();
     let (_dir, path) = make_temp_log(&lines);
 
     let output = StdCommand::new(lux_bin())
+        .arg("--cat")
         .arg("--color")
         .arg("never")
         .arg(path.to_str().unwrap())
@@ -1006,13 +1007,13 @@ fn filter_strip_ansi_matching() {
 
 #[test]
 fn syntect_highlights_markdown_file() {
-    // lux with a .md file should get syntect highlighting (ANSI codes)
+    // lux --cat with a .md file should get syntect highlighting (ANSI codes)
     let dir = TempDir::new().unwrap();
     let md_path = dir.path().join("test.md");
     std::fs::write(&md_path, "# Hello\n\nSome **bold** text\n").unwrap();
 
     let output = StdCommand::new(lux_bin())
-        .args(["--color", "always"])
+        .args(["--cat", "--color", "always"])
         .arg(md_path.to_str().unwrap())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -1068,13 +1069,13 @@ fn list_profiles_shows_logs_builtin() {
 
 #[test]
 fn syntect_highlights_sh_file() {
-    // lux with a .sh file should get syntect highlighting (ANSI codes)
+    // lux --cat with a .sh file should get syntect highlighting (ANSI codes)
     let dir = TempDir::new().unwrap();
     let sh_path = dir.path().join("test.sh");
     std::fs::write(&sh_path, "#!/bin/bash\n# comment\necho $HOME\n").unwrap();
 
     let output = StdCommand::new(lux_bin())
-        .args(["--color", "always"])
+        .args(["--cat", "--color", "always"])
         .arg(sh_path.to_str().unwrap())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -1092,13 +1093,13 @@ fn syntect_highlights_sh_file() {
 
 #[test]
 fn syntect_highlights_rust_file() {
-    // lux with a .rs file should get syntect highlighting
+    // lux --cat with a .rs file should get syntect highlighting
     let dir = TempDir::new().unwrap();
     let rs_path = dir.path().join("test.rs");
     std::fs::write(&rs_path, "fn main() {\n    let x = 42;\n    println!(\"hello\");\n}\n").unwrap();
 
     let output = StdCommand::new(lux_bin())
-        .args(["--color", "always"])
+        .args(["--cat", "--color", "always"])
         .arg(rs_path.to_str().unwrap())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -1112,4 +1113,66 @@ fn syntect_highlights_rust_file() {
         has_ansi_codes(&stdout),
         "Expected ANSI codes from syntect for Rust: {stdout:?}"
     );
+}
+
+// === Pager mode flag tests ===
+
+#[test]
+fn cat_flag_prints_file_and_exits() {
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("test.log");
+    std::fs::write(&file, "line 1\nline 2\nline 3\n").unwrap();
+
+    let output = StdCommand::new(lux_bin())
+        .args(["--cat", "--color", "never"])
+        .arg(file.to_str().unwrap())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("failed to run lux");
+
+    assert!(output.status.success(), "Expected exit 0, got: {:?}", output.status);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout, "line 1\nline 2\nline 3\n");
+}
+
+#[test]
+fn less_and_cat_conflict() {
+    lux()
+        .arg("--less")
+        .arg("--cat")
+        .arg("test.log")
+        .assert()
+        .failure();
+}
+
+#[test]
+fn less_and_follow_conflict() {
+    lux()
+        .arg("--less")
+        .arg("-f")
+        .arg("test.log")
+        .assert()
+        .failure();
+}
+
+#[test]
+fn cat_and_follow_conflict() {
+    lux()
+        .arg("--cat")
+        .arg("-f")
+        .arg("test.log")
+        .assert()
+        .failure();
+}
+
+#[test]
+fn config_subcommand_help() {
+    lux()
+        .arg("config")
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("default-file-mode"));
 }

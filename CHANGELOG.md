@@ -5,8 +5,24 @@ All notable changes to lux will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] - 2026-03-19
+Adding pager support so long output can be scrolled with `less`.
+
+### Added
+- Adding "less" support
+
 ## [0.1.4] - 2026-03-18
+Fix version checking against dev versions during update flow.
+
+### Fixed
+- Version comparison no longer fails on pre-release/dev version strings
+
 ## [0.1.3] - 2026-03-18
+Fix update checking logic.
+
+### Fixed
+- Corrected update notification behavior
+
 ## [0.1.2] - 2026-03-18
 Added automatic update checking with background GitHub API polling, interactive upgrade prompts, preference saving, and binary download. New `update` subcommand. Removed Windows release support due to Unix dependency. Added README and LICENSE.
 

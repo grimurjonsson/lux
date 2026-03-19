@@ -1,0 +1,78 @@
+<h2>Pager Architecture</h2>
+<p class="subtitle">How the new pager mode fits into lux's existing architecture</p>
+
+<div class="mockup">
+  <div class="mockup-header">Data Flow: Pager Mode</div>
+  <div class="mockup-body" style="font-family: monospace; font-size: 12px; background: #1e1e2e; color: #cdd6f4; padding: 20px; line-height: 1.6;">
+<span style="color: #89b4fa;">CLI args</span> ──→ <span style="color: #f9e2af;">Mode Detection</span> ──→ <span style="color: #a6e3a1;">match mode {</span>
+                                       <span style="color: #6c7086;">│</span>
+              ┌────────────────────────┼────────────────────────┐
+              <span style="color: #6c7086;">│</span>                        <span style="color: #6c7086;">│</span>                        <span style="color: #6c7086;">│</span>
+        <span style="color: #f38ba8;">Cat mode</span>              <span style="color: #fab387;">Follow mode</span>           <span style="color: #cba6f7;">Pager mode</span>  <span style="color: #a6e3a1;">← NEW</span>
+     (print &amp; exit)          (-f / -F)              (--less)
+              <span style="color: #6c7086;">│</span>                        <span style="color: #6c7086;">│</span>                        <span style="color: #6c7086;">│</span>
+              <span style="color: #6c7086;">│</span>                        <span style="color: #6c7086;">│</span>                 ┌──────┴──────┐
+              <span style="color: #6c7086;">│</span>                        <span style="color: #6c7086;">│</span>                 <span style="color: #6c7086;">│</span>             <span style="color: #6c7086;">│</span>
+              <span style="color: #6c7086;">│</span>                        <span style="color: #6c7086;">│</span>          <span style="color: #89b4fa;">PagerState</span>    <span style="color: #89b4fa;">PagerView</span>
+              <span style="color: #6c7086;">│</span>                        <span style="color: #6c7086;">│</span>          (lines, pos,  (ratatui
+              <span style="color: #6c7086;">│</span>                        <span style="color: #6c7086;">│</span>           filters)      rendering)
+              <span style="color: #6c7086;">│</span>                        <span style="color: #6c7086;">│</span>                 <span style="color: #6c7086;">│</span>
+              └────────────────────────┴─────────────────┘
+                                       <span style="color: #6c7086;">│</span>
+                              <span style="color: #f9e2af;">Shared: Engine</span>
+                         (rules, colors, syntax)
+  </div>
+</div>
+
+<div style="margin-top: 24px;"></div>
+
+<div class="mockup">
+  <div class="mockup-header">New Module: pager.rs</div>
+  <div class="mockup-body" style="font-family: monospace; font-size: 12px; background: #1e1e2e; color: #cdd6f4; padding: 20px; line-height: 1.6;">
+<span style="color: #cba6f7;">pub struct</span> <span style="color: #89b4fa;">Pager</span> {
+    lines: <span style="color: #f9e2af;">Vec&lt;String&gt;</span>,          <span style="color: #6c7086;">// raw file lines</span>
+    colored: <span style="color: #f9e2af;">Vec&lt;String&gt;</span>,        <span style="color: #6c7086;">// engine-colorized (ANSI)</span>
+    scroll_offset: <span style="color: #f9e2af;">usize</span>,       <span style="color: #6c7086;">// top visible line</span>
+    terminal_height: <span style="color: #f9e2af;">u16</span>,       <span style="color: #6c7086;">// rows available for content</span>
+    engine: <span style="color: #f9e2af;">Engine</span>,              <span style="color: #6c7086;">// shared coloring engine</span>
+    filter: <span style="color: #f9e2af;">LineFilter</span>,          <span style="color: #6c7086;">// include/exclude</span>
+    trigger: <span style="color: #f9e2af;">TriggerFilter</span>,      <span style="color: #6c7086;">// trigger state machine</span>
+    status: <span style="color: #f9e2af;">StatusBar</span>,           <span style="color: #6c7086;">// bottom bar info</span>
+}
+
+<span style="color: #cba6f7;">impl</span> <span style="color: #89b4fa;">Pager</span> {
+    <span style="color: #cba6f7;">pub fn</span> <span style="color: #a6e3a1;">run</span>(file, engine, filter, trigger) → <span style="color: #f9e2af;">Result&lt;()&gt;</span>
+    <span style="color: #6c7086;">// Enter alt screen → event loop → restore on quit</span>
+}
+  </div>
+</div>
+
+<div style="margin-top: 24px;"></div>
+
+<div class="mockup">
+  <div class="mockup-header">Event Loop</div>
+  <div class="mockup-body" style="font-family: monospace; font-size: 12px; background: #1e1e2e; color: #cdd6f4; padding: 20px; line-height: 1.6;">
+<span style="color: #a6e3a1;">loop</span> {
+    <span style="color: #6c7086;">// 1. Render visible lines + status bar</span>
+    terminal.<span style="color: #89b4fa;">draw</span>(|frame| {
+        render_content(frame, &amp;state);
+        render_status_bar(frame, &amp;state);
+    });
+
+    <span style="color: #6c7086;">// 2. Wait for input event</span>
+    <span style="color: #cba6f7;">match</span> crossterm::event::<span style="color: #89b4fa;">read</span>()? {
+        Key(<span style="color: #f9e2af;">'q'</span>)           → <span style="color: #f38ba8;">break</span>,
+        Key(<span style="color: #f9e2af;">Space</span>)         → scroll_down(page),
+        Key(<span style="color: #f9e2af;">'b'</span>)           → scroll_up(page),
+        Key(<span style="color: #f9e2af;">Down</span>) | Key(<span style="color: #f9e2af;">'j'</span>) → scroll_down(1),
+        Key(<span style="color: #f9e2af;">Up</span>)   | Key(<span style="color: #f9e2af;">'k'</span>) → scroll_up(1),
+        Key(<span style="color: #f9e2af;">'g'</span>)           → goto_top(),
+        Key(<span style="color: #f9e2af;">'G'</span>)           → goto_bottom(),
+        Mouse(<span style="color: #f9e2af;">ScrollDown</span>)  → scroll_down(3),
+        Mouse(<span style="color: #f9e2af;">ScrollUp</span>)    → scroll_up(3),
+        <span style="color: #f9e2af;">Resize</span>(w, h)      → update_dimensions(),
+        _                  → <span style="color: #cba6f7;">continue</span>,
+    }
+}
+  </div>
+</div>

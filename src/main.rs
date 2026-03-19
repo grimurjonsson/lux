@@ -4,7 +4,7 @@ use std::path::Path;
 use anyhow::Context;
 use clap::{CommandFactory, Parser};
 
-use lux::cli::{Cli, Command, ProfileAction, StripAnsi};
+use lux::cli::{Cli, Command, ConfigAction, ProfileAction, StripAnsi};
 use clap_complete::generate;
 use lux::config;
 use lux::engine::Engine;
@@ -63,6 +63,20 @@ fn run() -> anyhow::Result<()> {
                 }
                 std::process::exit(0);
             }
+            Command::Config { action } => {
+                match action {
+                    ConfigAction::DefaultFileMode { value } => {
+                        let valid = ["less", "cat"];
+                        if !valid.contains(&value.as_str()) {
+                            eprintln!("lux: invalid mode '{}'. Valid options: less, cat", value);
+                            std::process::exit(1);
+                        }
+                        config::set_config_field("default_file_mode", Some(value))?;
+                        eprintln!("Default file mode set to: {value}");
+                    }
+                }
+                std::process::exit(0);
+            }
         }
     }
 
@@ -79,6 +93,8 @@ fn run() -> anyhow::Result<()> {
         && cli.exclude.is_empty()
         && !cli.follow_descriptor
         && !cli.follow_name
+        && !cli.less
+        && !cli.cat
         && !stdin_is_pipe()
     {
         Cli::command().print_help()?;
@@ -236,11 +252,21 @@ fn run() -> anyhow::Result<()> {
 
         let has_follow_flag = cli.follow_descriptor || cli.follow_name;
 
-        // Two-mode detection:
-        // 1. file + -f or -F = FOLLOW
-        // 2. otherwise = PRINT AND EXIT (show last N lines)
-        let is_print_and_exit = !has_follow_flag;
+        // Mode resolution: --less > --cat > -f/-F > config default > "less"
+        let use_pager = if cli.less {
+            true
+        } else if cli.cat || has_follow_flag {
+            false
+        } else {
+            // Check config default_file_mode
+            config.as_ref()
+                .and_then(|(c, _)| c.default_file_mode.as_deref())
+                .unwrap_or("less") == "less"
+        };
 
+        let is_print_and_exit = !has_follow_flag && !use_pager;
+
+        // line_spec is computed for follow/cat modes; pager mode ignores it and reads the full file.
         // Resolve line count: explicit CLI -n > profile lines > default
         // Print-and-exit shows the whole file by default; follow modes show last 20
         let default_lines = if is_print_and_exit { "+1" } else { "20" };
@@ -250,7 +276,21 @@ fn run() -> anyhow::Result<()> {
         let line_spec = tail::parse_line_spec(lines_str)?;
         let path = std::path::Path::new(file_path);
 
-        if cli.follow_descriptor {
+        if use_pager {
+            let mut file = std::fs::File::open(path)
+                .with_context(|| format!("cannot open '{file_path}'"))?;
+            let lines = tail::read_from_line(&mut file, 1)?;
+            let rule_count = engine.rule_count();
+            lux::pager::run(
+                path,
+                &engine,
+                &filter,
+                &mut trigger_filter,
+                active_profile_name.as_deref(),
+                rule_count,
+                &lines,
+            )?;
+        } else if cli.follow_descriptor {
             // -f mode: file MUST exist
             let mut file = std::fs::File::open(path)
                 .with_context(|| format!("cannot open '{file_path}'"))?;

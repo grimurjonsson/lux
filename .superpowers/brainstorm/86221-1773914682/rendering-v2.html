@@ -1,0 +1,53 @@
+<h2>Rendering (revised)</h2>
+<p class="subtitle">No borders on content. ANSI parsed natively by ratatui.</p>
+
+<div class="mockup">
+  <div class="mockup-header">Screen Layout</div>
+  <div class="mockup-body" style="font-family: monospace; font-size: 13px; background: #1e1e2e; color: #cdd6f4; padding: 20px; white-space: pre; overflow-x: auto; line-height: 1.5;"><span style="color: #f38ba8;">2024-03-19 ERROR Connection refused</span>
+<span style="color: #a6e3a1;">2024-03-19 INFO  Server started on :8080</span>
+<span style="color: #f9e2af;">2024-03-19 WARN  Slow query (2.3s)</span>
+2024-03-19 DEBUG Processing request #4521
+<span style="color: #a6e3a1;">2024-03-19 INFO  Request completed 200 OK</span>
+2024-03-19 DEBUG Flushing write buffer
+<span style="color: #f38ba8;">2024-03-19 ERROR Timeout on /api/users</span>
+<span style="color: #a6e3a1;">2024-03-19 INFO  Retrying connection (attempt 2)</span>
+<span style="color: #a6e3a1;">2024-03-19 INFO  Connection restored</span>
+2024-03-19 DEBUG Cache hit ratio: 0.87
+
+
+<span style="background: #313244; color: #bac2de;"> <span style="color: #89b4fa;">app.log</span> <span style="color: #6c7086;">│</span> profile: <span style="color: #f9e2af;">logs</span> <span style="color: #6c7086;">│</span> 3 rules    42-67/1204 (5%) <span style="color: #6c7086;">q:quit Space:next b:prev</span> </span></div>
+</div>
+
+<div style="margin-top: 24px;"></div>
+
+<div class="mockup">
+  <div class="mockup-header">Rendering Code</div>
+  <div class="mockup-body" style="font-family: monospace; font-size: 13px; background: #1e1e2e; color: #cdd6f4; padding: 20px; white-space: pre; overflow-x: auto; line-height: 1.5;"><span style="color: #6c7086;">// Colorize through existing pipeline (unchanged)</span>
+<span style="color: #cba6f7;">let</span> ansi_lines: Vec&lt;String&gt; = raw_lines
+    .iter()
+    .filter(|l| line_filter.check(l))
+    .map(|l| engine.apply(l))
+    .collect();
+
+<span style="color: #6c7086;">// Convert ANSI → ratatui Lines (native support)</span>
+<span style="color: #cba6f7;">let</span> tui_lines: Vec&lt;Line&gt; = ansi_lines
+    .iter()
+    .map(|s| Line::from_ansi(s))  <span style="color: #a6e3a1;">// built-in since ratatui 0.28</span>
+    .collect();
+
+<span style="color: #6c7086;">// Layout: content fills screen, status bar = 1 line</span>
+<span style="color: #cba6f7;">let</span> [content_area, status_area] = Layout::vertical([
+    Constraint::Min(1),      <span style="color: #6c7086;">// content: all available space</span>
+    Constraint::Length(1),   <span style="color: #6c7086;">// status: exactly 1 row</span>
+]).areas(frame.area());
+
+<span style="color: #6c7086;">// Content: no borders, no block, just raw text</span>
+<span style="color: #cba6f7;">let</span> visible = &amp;tui_lines[offset..offset + height];
+<span style="color: #cba6f7;">let</span> content = Paragraph::new(visible.to_vec());
+frame.render_widget(content, content_area);
+
+<span style="color: #6c7086;">// Status bar: styled background, no border</span>
+<span style="color: #cba6f7;">let</span> status = Paragraph::new(status_line)
+    .style(Style::new().bg(Color::DarkGray));
+frame.render_widget(status, status_area);</div>
+</div>

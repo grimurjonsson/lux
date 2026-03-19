@@ -1,0 +1,61 @@
+<h2>Rendering: ANSI → ratatui</h2>
+<p class="subtitle">How lux's colorized output integrates with ratatui's rendering</p>
+
+<div class="mockup">
+  <div class="mockup-header">The Challenge</div>
+  <div class="mockup-body" style="font-family: monospace; font-size: 13px; background: #1e1e2e; color: #cdd6f4; padding: 20px; white-space: pre; overflow-x: auto; line-height: 1.5;"><span style="color: #6c7086;">// lux Engine outputs ANSI-styled strings:</span>
+<span style="color: #f38ba8;">\x1b[1;31m</span>ERROR<span style="color: #f38ba8;">\x1b[0m</span> Connection refused
+
+<span style="color: #6c7086;">// ratatui expects its own Span/Line types:</span>
+Line::from(vec![
+    Span::styled("ERROR", Style::new().bold().red()),
+    Span::raw(" Connection refused"),
+])
+
+<span style="color: #a6e3a1;">// Solution: use ratatui's built-in ANSI parsing</span>
+<span style="color: #a6e3a1;">// ratatui::text::Line has from_ansi() support</span></div>
+</div>
+
+<div style="margin-top: 24px;"></div>
+
+<div class="mockup">
+  <div class="mockup-header">Approach: ansi-to-tui bridge</div>
+  <div class="mockup-body" style="font-family: monospace; font-size: 13px; background: #1e1e2e; color: #cdd6f4; padding: 20px; white-space: pre; overflow-x: auto; line-height: 1.5;"><span style="color: #6c7086;">// 1. Read file lines</span>
+<span style="color: #cba6f7;">let</span> raw_lines = read_file(path);
+
+<span style="color: #6c7086;">// 2. Colorize through existing pipeline (unchanged!)</span>
+<span style="color: #cba6f7;">let</span> ansi_lines: Vec&lt;String&gt; = raw_lines
+    .iter()
+    .filter(|l| line_filter.check(l))
+    .map(|l| engine.apply(l))
+    .collect();
+
+<span style="color: #6c7086;">// 3. Convert ANSI → ratatui Lines (one-time on load)</span>
+<span style="color: #cba6f7;">let</span> tui_lines: Vec&lt;Line&gt; = ansi_lines
+    .iter()
+    .map(|s| Line::from_ansi(s))  <span style="color: #6c7086;">// or ansi_to_tui crate</span>
+    .collect();
+
+<span style="color: #6c7086;">// 4. Render visible slice in draw loop</span>
+<span style="color: #cba6f7;">let</span> visible = &amp;tui_lines[offset..offset + height];
+<span style="color: #cba6f7;">let</span> paragraph = Paragraph::new(visible.to_vec());
+frame.render_widget(paragraph, content_area);</div>
+</div>
+
+<div style="margin-top: 24px;"></div>
+
+<div class="mockup">
+  <div class="mockup-header">Screen Layout (ratatui)</div>
+  <div class="mockup-body" style="font-family: monospace; font-size: 13px; background: #1e1e2e; color: #cdd6f4; padding: 20px; white-space: pre; overflow-x: auto; line-height: 1.5;">┌──────────────────────────────────────────────┐
+│                                              │  ← <span style="color: #89b4fa;">content_area</span>
+│  <span style="color: #f38ba8;">2024-03-19 ERROR Connection refused</span>          │     Layout::vertical([
+│  <span style="color: #a6e3a1;">2024-03-19 INFO  Server started on :8080</span>     │       Constraint::Min(1),
+│  <span style="color: #f9e2af;">2024-03-19 WARN  Slow query (2.3s)</span>           │       Constraint::Length(1),
+│  2024-03-19 DEBUG Processing request #4521   │     ])
+│  <span style="color: #a6e3a1;">2024-03-19 INFO  Request completed 200 OK</span>    │
+│                                              │
+│                                              │
+├──────────────────────────────────────────────┤
+│<span style="color: #89b4fa;"> app.log</span> │ profile: <span style="color: #f9e2af;">logs</span> │ 3 rules  42-67/1204 (5%) │  ← <span style="color: #89b4fa;">status_area</span>
+└──────────────────────────────────────────────┘     Constraint::Length(1)</div>
+</div>
