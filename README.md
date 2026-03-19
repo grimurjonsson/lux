@@ -344,6 +344,9 @@ Options:
   -p, --profile <PROFILE>
           Select a named profile from the config file
 
+      --no-profile
+          Disable automatic profile and syntax highlighting (only explicit -r rules apply)
+
       --config <CONFIG>
           Path to a custom config file (overrides XDG discovery)
 
@@ -372,7 +375,7 @@ Options:
           Open file in interactive pager mode (like less)
 
       --cat
-          Print file and exit (non-interactive, overrides default pager mode)
+          Print file and exit (non-interactive, this is the default)
 
   -n <LINES>
           Number of lines to show (e.g. "10", "+5" for from-line)
