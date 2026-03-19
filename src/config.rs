@@ -296,6 +296,18 @@ pub fn detect_profile_from_content(lines: &[String]) -> Option<String> {
         return Some("help".to_string());
     }
 
+    // Detect log content: look for common log level keywords
+    let log_level_count = lines.iter().filter(|l| {
+        let upper = l.to_uppercase();
+        upper.contains("ERROR") || upper.contains("WARN") || upper.contains("INFO")
+            || upper.contains("DEBUG") || upper.contains("TRACE")
+    }).count();
+
+    // If at least 2 of the first 10 lines contain log levels, treat as logs
+    if log_level_count >= 2 {
+        return Some("logs".to_string());
+    }
+
     None
 }
 
@@ -545,7 +557,7 @@ pub fn print_colors_to(out: &mut dyn Write) {
     let _ = writeln!(out, "Formats:");
     let _ = writeln!(out, "  #rrggbb  Hex RGB (e.g., #ff0000)");
     let _ = writeln!(out, "  0-255    256-color index (e.g., 196)");
-    let _ = writeln!(out, "  bg:COLOR Background (e.g., bg:red, bg:#00ff00)");
+    let _ = writeln!(out, "  bg-COLOR Background (e.g., bg-red, bg-#00ff00)");
 }
 
 #[cfg(test)]
@@ -899,7 +911,7 @@ lines = "+1"
         assert!(output.contains("Formats"), "Got: {output}");
         assert!(output.contains("#rrggbb"), "Got: {output}");
         assert!(output.contains("0-255"), "Got: {output}");
-        assert!(output.contains("bg:"), "Got: {output}");
+        assert!(output.contains("bg-"), "Got: {output}");
     }
 
     // === builtin_profiles tests ===

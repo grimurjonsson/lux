@@ -1,12 +1,12 @@
-# lux
-
-**Lit Up teXt** — instantly readable colored output.
-
-`lux` colors your logs, highlights your files, and filters your output. Pipe anything through it and get the right colors applied to the right patterns, zero configuration needed for common cases.
+<p align="center">
+  <img src="assets/banner.svg" alt="lux — Lit Up teXt" width="480">
+</p>
 
 ```
-tail -f app.log | lux
+echo "lux" | lux -r "(l):yellow:cap1" -r "(u):magenta:cap1" -r "(x):cyan:cap1"
 ```
+
+**Lit Up teXt** — colors your logs, highlights your files, and filters your output. Pipe anything through it and get the right colors applied to the right patterns, zero configuration needed for common cases.
 
 ## Install
 
@@ -26,6 +26,18 @@ just install
 
 Requires [Rust](https://rustup.rs/) and [just](https://github.com/casey/just).
 
+## Quick Start
+
+```bash
+lux -f app.log                              # follow with auto-coloring
+lux -f app.log -r 'ERROR:red'               # add custom rules
+lux -f app.log -t ERROR -b 5 -a 10          # trigger on ERROR with context
+```
+
+<p align="center">
+  <img src="assets/hero.gif" alt="lux quick start demo" width="800">
+</p>
+
 ## Usage
 
 ### Pipe mode
@@ -38,9 +50,13 @@ docker logs -f myapp | lux
 kubectl logs -f pod/api | lux
 ```
 
+<p align="center">
+  <img src="assets/pipe.gif" alt="lux pipe mode demo" width="800">
+</p>
+
 ### File mode
 
-Read a file directly — opens in an interactive pager (like `less`) with syntax highlighting:
+Read a file directly — prints with syntax highlighting (like `cat` with colors):
 
 ```bash
 lux README.md
@@ -48,19 +64,19 @@ lux config.yaml
 lux src/main.rs
 ```
 
-Navigate with `Space`/`b` (page), `j`/`k` or arrows (line), `g`/`G` (top/bottom), `q` to quit. Text selection and copy works normally.
-
-Print and exit instead (like `cat`):
-
-```bash
-lux --cat app.log
-```
-
 Show last N lines (like `tail`):
 
 ```bash
-lux --cat -n 50 app.log
+lux -n 50 app.log
 ```
+
+Open in interactive pager instead (like `less`):
+
+```bash
+lux --less app.log
+```
+
+Navigate with `Space`/`b` (page), `j`/`k` or arrows (line), `g`/`G` (top/bottom), `q` to quit. Text selection and copy works normally.
 
 Follow a file (like `tail -f`):
 
@@ -72,9 +88,22 @@ lux -F app.log       # follow by name (handles log rotation)
 Set the default file mode:
 
 ```bash
-lux config default-file-mode cat    # always print-and-exit
-lux config default-file-mode less   # always use pager (default)
+lux config default-file-mode less   # use pager
+lux config default-file-mode cat    # print-and-exit (default)
 ```
+
+### Syntax highlighting
+
+Open code and config files with automatic syntax coloring (powered by [syntect](https://github.com/trishume/syntect) with Catppuccin Mocha theme):
+
+```bash
+lux src/main.rs
+lux config.yaml
+```
+
+<p align="center">
+  <img src="assets/syntax.gif" alt="lux syntax highlighting demo" width="800">
+</p>
 
 ### Custom rules
 
@@ -102,9 +131,13 @@ echo "time=12:34:56 msg=hello" | lux -r 'time=(\S+):cyan:cap1'
 | `STYLE` | Color/style (see below) |
 | `SCOPE` | `line` (default), `match`, or `cap1` |
 
-**Styles:** `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `white`, `dim`, `bold`, `italic`, `underline`. Combine with `+`: `bold+red`. Use hex (`#ff5500`), 256-color (`208`), or `bg:color` for backgrounds.
+**Styles:** `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `white`, `dim`, `bold`, `italic`, `underline`. Combine with `+`: `bold+red`. Use hex (`#ff5500`), 256-color (`208`), or `bg-color` for backgrounds.
 
 Run `lux --list-colors` to see all available colors and styles.
+
+<p align="center">
+  <img src="assets/rules.gif" alt="lux custom rules demo" width="800">
+</p>
 
 ### Filtering
 
@@ -126,6 +159,10 @@ Combine both:
 tail -f app.log | lux -i 'user-service' -e 'healthcheck'
 ```
 
+<p align="center">
+  <img src="assets/filter.gif" alt="lux filtering demo" width="800">
+</p>
+
 ### Triggers
 
 Suppress output until a pattern matches, then show a context window around it:
@@ -143,6 +180,10 @@ tail -f app.log | lux -t 'ERROR' -t 'FATAL'
 # Use a regex boundary instead of line count
 tail -f app.log | lux -t 'ERROR' -b '^===' -a '^---'
 ```
+
+<p align="center">
+  <img src="assets/triggers.gif" alt="lux triggers demo" width="800">
+</p>
 
 ### Profiles
 
@@ -198,6 +239,10 @@ Set a default profile:
 lux profile set-default logs
 lux profile clear-default
 ```
+
+<p align="center">
+  <img src="assets/profiles.gif" alt="lux profiles demo" width="800">
+</p>
 
 ### Configuration
 
