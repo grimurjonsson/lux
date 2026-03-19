@@ -445,6 +445,26 @@ _release bump *args="":
     # Update Cargo.lock with new version
     cargo check --quiet
 
+    # Update README.md reference section from --help output
+    README="README.md"
+    if [ -f "$README" ] && grep -q 'BEGIN REFERENCE' "$README"; then
+        cargo build --quiet --release 2>/dev/null || cargo build --quiet
+        HELP=$(cargo run --quiet -- --help 2>/dev/null || target/release/lux --help)
+        # Extract subcommands summary
+        SUBCMDS=$(cargo run --quiet -- help 2>/dev/null | grep '^ ' | grep -v '^  help' || true)
+
+        BEGIN=$(grep -n 'BEGIN REFERENCE' "$README" | head -1 | cut -d: -f1)
+        END=$(grep -n 'END REFERENCE' "$README" | head -1 | cut -d: -f1)
+        if [ -n "$BEGIN" ] && [ -n "$END" ]; then
+            OUTFILE=$(mktemp)
+            head -n "$BEGIN" "$README" > "$OUTFILE"
+            printf '```\n%s\n```\n' "$HELP" >> "$OUTFILE"
+            tail -n +"$END" "$README" >> "$OUTFILE"
+            mv "$OUTFILE" "$README"
+            echo "✓ Updated README.md reference section"
+        fi
+    fi
+
     if confirm "Create release branch, commit, and tag?"; then
         git checkout -b "$RELEASE_BRANCH"
         echo "✓ Created branch $RELEASE_BRANCH"
@@ -452,6 +472,9 @@ _release bump *args="":
         git add Cargo.toml Cargo.lock
         if [ -f "$CHANGELOG_FILE" ]; then
             git add "$CHANGELOG_FILE"
+        fi
+        if [ -f "$README" ]; then
+            git add "$README"
         fi
         if [ -n "$MSG" ]; then
             git commit -m "Release v$NEW_VERSION" -m "$MSG"
