@@ -221,13 +221,56 @@ build-release-binaries:
     echo "Upload these to your GitHub release"
 
 # Bump patch version (0.1.0 → 0.1.1). Pass -y to skip prompts.
-release-patch msg="" *flags="": (_release "patch" msg flags)
+release-patch *args="": (_release "patch" args)
 
 # Bump minor version (0.1.0 → 0.2.0). Pass -y to skip prompts.
-release-minor msg="" *flags="": (_release "minor" msg flags)
+release-minor *args="": (_release "minor" args)
 
 # Bump major version (0.1.0 → 1.0.0). Pass -y to skip prompts.
-release-major msg="" *flags="": (_release "major" msg flags)
+release-major *args="": (_release "major" args)
+
+# Undo a cancelled release: delete tag + branch, restore Cargo.toml, checkout main
+release-abort:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    CURRENT=$(git branch --show-current)
+
+    if [[ ! "$CURRENT" =~ ^release/ ]]; then
+        echo "Not on a release branch (on '$CURRENT'). Nothing to abort."
+        exit 1
+    fi
+
+    VERSION="${CURRENT#release/}"
+    echo "Aborting release $VERSION..."
+
+    # Delete the tag if it exists locally
+    if git tag -l "$VERSION" | grep -q .; then
+        git tag -d "$VERSION"
+        echo "✓ Deleted local tag $VERSION"
+    fi
+
+    # Delete the remote tag if it was pushed
+    if git ls-remote --tags origin "$VERSION" | grep -q .; then
+        read -p "Remote tag $VERSION exists. Delete it? [y/N] " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            git push origin ":refs/tags/$VERSION"
+            echo "✓ Deleted remote tag $VERSION"
+        fi
+    fi
+
+    # Switch to main and restore Cargo.toml/CHANGELOG.md
+    git checkout main
+    git checkout -- Cargo.toml CHANGELOG.md Cargo.lock 2>/dev/null || true
+    echo "✓ Switched to main, restored versioned files"
+
+    # Delete the release branch
+    git branch -D "$CURRENT"
+    echo "✓ Deleted branch $CURRENT"
+
+    echo ""
+    echo "Release aborted. You're back on main."
 
 # Test changelog generation (dry-run, prints to stdout)
 generate-changelog-test:
@@ -297,14 +340,16 @@ generate-changelog-test:
         echo ""
     fi
 
-_release bump msg="" *flags="":
+_release bump *args="":
     #!/usr/bin/env bash
     set -euo pipefail
 
     AUTO_YES=false
-    for flag in {{ flags }}; do
-        case "$flag" in
+    MSG=""
+    for arg in {{ args }}; do
+        case "$arg" in
             -y|--yes) AUTO_YES=true ;;
+            *) MSG="$arg" ;;
         esac
     done
 
@@ -345,8 +390,8 @@ _release bump msg="" *flags="":
         fi
 
         # If no commits found but a release message was provided, use it
-        if [ -z "$CHANGES" ] && [ -n "{{ msg }}" ]; then
-            CHANGES="- {{ msg }}"
+        if [ -z "$CHANGES" ] && [ -n "$MSG" ]; then
+            CHANGES="- $MSG"
         fi
 
         TLDR=""
@@ -408,8 +453,8 @@ _release bump msg="" *flags="":
         if [ -f "$CHANGELOG_FILE" ]; then
             git add "$CHANGELOG_FILE"
         fi
-        if [ -n "{{ msg }}" ]; then
-            git commit -m "Release v$NEW_VERSION" -m "{{ msg }}"
+        if [ -n "$MSG" ]; then
+            git commit -m "Release v$NEW_VERSION" -m "$MSG"
         else
             git commit -m "Release v$NEW_VERSION"
         fi
