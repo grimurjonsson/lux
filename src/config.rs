@@ -6,6 +6,10 @@ use anyhow::{anyhow, Result};
 use owo_colors::{OwoColorize, Style, XtermColors};
 use serde::Deserialize;
 
+use crate::color;
+use crate::engine::Engine;
+use crate::rules::rule_from_config;
+
 /// A single rule entry from the TOML config file.
 #[derive(Deserialize, Debug, Clone)]
 pub struct RuleConfig {
@@ -484,6 +488,354 @@ fn print_profile_entry(
         )?;
     }
     Ok(())
+}
+
+/// Show detailed information about a specific profile with an example preview.
+pub fn show_profile(config_path: Option<&Path>, name: &str) -> Result<()> {
+    owo_colors::set_override(true);
+    let config = load_config(config_path)?;
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    let result = show_profile_to(config.as_ref().map(|(c, p)| (c, p.clone())), name, &mut out);
+    owo_colors::set_override(false);
+    result
+}
+
+/// Write profile details and preview to the given writer (testable version).
+pub fn show_profile_to(
+    config: Option<(&Config, PathBuf)>,
+    name: &str,
+    out: &mut dyn Write,
+) -> Result<()> {
+    let builtins = builtin_profiles();
+
+    // Find the profile
+    let (profile, is_builtin) = find_profile_by_name(
+        name,
+        config.as_ref().map(|(c, _)| *c),
+        &builtins,
+    )?;
+
+    // Header
+    if is_builtin {
+        writeln!(
+            out,
+            "{} {} {}",
+            "Profile:".bold(),
+            name.cyan().bold(),
+            "(built-in)".dimmed()
+        )?;
+    } else {
+        writeln!(out, "{} {}", "Profile:".bold(), name.cyan().bold())?;
+    }
+    writeln!(out)?;
+
+    // Rules
+    if !profile.rules.is_empty() {
+        writeln!(out, "  {}", "Rules:".bold())?;
+        for (i, rule) in profile.rules.iter().enumerate() {
+            let scope_display = if rule.scope == "line" || rule.scope.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", rule.scope)
+            };
+            // Render the style name in its own style
+            let style_rendered = match color::parse_style(&rule.style) {
+                Ok(style) => rule.style.style(style).to_string(),
+                Err(_) => rule.style.clone(),
+            };
+            writeln!(
+                out,
+                "    {}  {} {} {}{}",
+                format!("{:>2}.", i + 1).dimmed(),
+                format!("/{}/", rule.pattern).dimmed(),
+                "→".dimmed(),
+                style_rendered,
+                scope_display.dimmed(),
+            )?;
+        }
+        writeln!(out)?;
+    }
+
+    // Triggers
+    if !profile.trigger.is_empty() {
+        writeln!(out, "  {}", "Triggers:".bold())?;
+        for t in &profile.trigger {
+            writeln!(out, "    {}", t)?;
+        }
+        if let Some(ref b) = profile.before {
+            writeln!(out, "    {} {}", "before:".dimmed(), b)?;
+        }
+        if let Some(ref a) = profile.after {
+            writeln!(out, "    {} {}", "after:".dimmed(), a)?;
+        }
+        writeln!(out)?;
+    }
+
+    // Lines
+    if let Some(ref l) = profile.lines {
+        writeln!(out, "  {} {}", "Lines:".bold(), l)?;
+        writeln!(out)?;
+    }
+
+    // Extensions
+    if !profile.extensions.is_empty() {
+        let parts: Vec<String> = profile.extensions.iter().map(|e| format!(".{e}")).collect();
+        writeln!(out, "  {} {}", "Auto-select:".bold(), parts.join(", "))?;
+        writeln!(out)?;
+    }
+
+    // Config path for user profiles
+    if !is_builtin {
+        if let Some((_, ref path)) = config {
+            writeln!(
+                out,
+                "  {} {}",
+                "Config:".bold(),
+                path.display().dimmed()
+            )?;
+            writeln!(out)?;
+        }
+    }
+
+    // Preview
+    if !profile.rules.is_empty() {
+        let example_lines = example_lines_for_profile(name, &profile);
+        if !example_lines.is_empty() {
+            // Build engine from profile rules
+            let mut rules = Vec::new();
+            for (i, rc) in profile.rules.iter().enumerate() {
+                if let Ok(rule) = rule_from_config(&rc.pattern, &rc.style, &rc.scope, i) {
+                    rules.push(rule);
+                }
+            }
+            let engine = Engine::new(rules, true, None);
+
+            writeln!(out, "  {}", "Preview:".bold())?;
+            for line in &example_lines {
+                let colored = engine.apply(line);
+                writeln!(out, "    {}", colored)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Find a profile by name from user config or builtins.
+fn find_profile_by_name(
+    name: &str,
+    config: Option<&Config>,
+    builtins: &HashMap<String, ProfileConfig>,
+) -> Result<(ProfileConfig, bool)> {
+    // Check user profiles first (they override builtins)
+    if let Some(cfg) = config {
+        if let Some(p) = cfg.profiles.get(name) {
+            return Ok((p.clone(), false));
+        }
+    }
+    // Check builtins
+    if let Some(p) = builtins.get(name) {
+        return Ok((p.clone(), true));
+    }
+    // Not found
+    let mut available: Vec<String> = builtins.keys().cloned().collect();
+    if let Some(cfg) = config {
+        available.extend(cfg.profiles.keys().cloned());
+    }
+    available.sort();
+    available.dedup();
+    if available.is_empty() {
+        Err(anyhow!("profile '{}' not found. No profiles defined", name))
+    } else {
+        Err(anyhow!(
+            "profile '{}' not found. Available: {}",
+            name,
+            available.join(", ")
+        ))
+    }
+}
+
+/// Return example text lines appropriate for demonstrating a profile's rules.
+fn example_lines_for_profile(name: &str, profile: &ProfileConfig) -> Vec<String> {
+    match name {
+        "logs" => vec![
+            "2024-03-20 10:15:30 INFO  Application started successfully".into(),
+            "2024-03-20 10:15:31 DEBUG Loading configuration from config.yml".into(),
+            "2024-03-20 10:15:32 WARN  Deprecated API endpoint called".into(),
+            "2024-03-20 10:15:33 ERROR Connection refused: database timeout".into(),
+            "2024-03-20 10:15:34 TRACE Entering function handle_request()".into(),
+            "2024-03-20 10:15:35 FATAL Critical system failure, shutting down".into(),
+        ],
+        "help" => vec![
+            "Usage: myapp [OPTIONS] <COMMAND>".into(),
+            "".into(),
+            "Commands:".into(),
+            "  serve    Start the development server".into(),
+            "  build    Build the project for production".into(),
+            "".into(),
+            "Options:".into(),
+            "  -p, --port <PORT>        Port to listen on [default: 8080]".into(),
+            "  -v, --verbose            Enable verbose logging".into(),
+            "      --config <FILE>      Path to config file".into(),
+            "  -h, --help               Print help".into(),
+            r#"  -V, --version            Print version [possible values: full, short]"#.into(),
+        ],
+        _ => generate_example_lines(profile),
+    }
+}
+
+/// Generate example lines for a custom profile by matching rules against a sample pool.
+fn generate_example_lines(profile: &ProfileConfig) -> Vec<String> {
+    use regex::Regex;
+
+    const SAMPLE_POOL: &[&str] = &[
+        "2024-03-20 10:15:30 INFO  Application started on port 8080",
+        "2024-03-20 10:15:31 DEBUG Loading configuration from /etc/app.yml",
+        "2024-03-20 10:15:32 WARN  Cache miss for session key",
+        "2024-03-20 10:15:33 ERROR Connection refused: database timeout",
+        "2024-03-20 10:15:34 TRACE Entering function handle_request()",
+        "2024-03-20 10:15:35 FATAL Critical system failure",
+        "Usage: myapp [OPTIONS] <COMMAND>",
+        "Options:",
+        "Commands:",
+        "  serve    Start the development server",
+        "  -v, --verbose        Enable verbose output",
+        "  -h, --help           Print help [default: auto]",
+        "GET /api/users HTTP/1.1 200 OK",
+        "POST /api/login HTTP/1.1 401 Unauthorized",
+        "user=42 action=login status=success",
+        r#"192.168.1.100 [20/Mar/2024] "GET /index.html" 200"#,
+        "Thread-1 [pool-3] com.app.Service: Processing request #1234",
+        "django.request WARNING Not Found: /favicon.ico",
+        "spring.boot: Application context refreshed in 2.3s",
+        "SELECT * FROM users WHERE id = 42;",
+        "https://example.com/api/v1/users?id=42",
+        "File not found: /var/log/app.log",
+        "Connection established to 10.0.0.1:5432",
+        "Response time: 142ms (threshold: 200ms)",
+        "Memory usage: 256MB / 512MB (50%)",
+        "Build succeeded: 42 tests passed, 0 failed",
+        "Deployment complete: v2.1.0 -> production",
+    ];
+
+    let mut used = std::collections::HashSet::new();
+    let mut lines = Vec::new();
+
+    for rule in &profile.rules {
+        if let Ok(re) = Regex::new(&rule.pattern) {
+            // First try the sample pool
+            let mut found = false;
+            for &sample in SAMPLE_POOL {
+                if re.is_match(sample) && !used.contains(sample) {
+                    used.insert(sample);
+                    lines.push(sample.to_string());
+                    found = true;
+                    break;
+                }
+            }
+            // If no pool match, try to synthesize a line from the pattern
+            if !found {
+                if let Some(line) = synthesize_example(&rule.pattern, &re) {
+                    lines.push(line);
+                }
+            }
+        }
+    }
+
+    if lines.is_empty() {
+        lines.push("(no matching examples — try: echo 'your text' | lux -p <name>)".into());
+    }
+
+    lines
+}
+
+/// Try to synthesize an example line from a regex pattern by extracting literal parts.
+fn synthesize_example(pattern: &str, compiled: &regex::Regex) -> Option<String> {
+    // Strip common regex prefixes/modifiers
+    let cleaned = pattern
+        .replace("(?i)", "")
+        .replace("(?x)", "");
+
+    // Extract literal characters by removing common metacharacters
+    let mut literal = String::new();
+    let mut chars = cleaned.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => {
+                // Handle escape sequences
+                if let Some(&next) = chars.peek() {
+                    match next {
+                        'd' => { literal.push('0'); chars.next(); }
+                        'w' => { literal.push('x'); chars.next(); }
+                        's' => { literal.push(' '); chars.next(); }
+                        'b' | 'B' => { chars.next(); } // word boundary, skip
+                        _ => { literal.push(next); chars.next(); } // literal escape
+                    }
+                }
+            }
+            '(' | ')' => {} // grouping, skip
+            '[' => {
+                // Skip character class, but grab first literal char if possible
+                let mut class_char = None;
+                while let Some(&ch) = chars.peek() {
+                    chars.next();
+                    if ch == ']' { break; }
+                    if class_char.is_none() && ch != '^' && ch != '-' {
+                        class_char = Some(ch);
+                    }
+                }
+                if let Some(ch) = class_char {
+                    literal.push(ch);
+                }
+            }
+            '^' | '$' => {} // anchors, skip
+            '+' | '?' => {} // quantifiers, skip
+            '*' => {} // quantifier on previous, skip
+            '.' => {
+                // Check if followed by * or + (wildcard)
+                if chars.peek() == Some(&'*') || chars.peek() == Some(&'+') {
+                    literal.push_str(" sample text");
+                    chars.next(); // consume the quantifier
+                } else {
+                    literal.push('x');
+                }
+            }
+            '{' => {
+                // Skip quantifier like {2} or {1,3}
+                while let Some(&ch) = chars.peek() {
+                    chars.next();
+                    if ch == '}' { break; }
+                }
+            }
+            '|' => { literal.push(' '); } // alternation, use space
+            _ => { literal.push(c); }
+        }
+    }
+
+    let literal = literal.trim().to_string();
+    if literal.is_empty() {
+        return None;
+    }
+
+    // Build a candidate line and verify the regex matches it
+    let candidate = format!("Example: {}", literal);
+    if compiled.is_match(&candidate) {
+        return Some(candidate);
+    }
+
+    // Try just the literal itself
+    if compiled.is_match(&literal) {
+        return Some(format!("Example: {}", literal));
+    }
+
+    // Last resort: wrap in a realistic-looking line
+    let padded = format!("2024-03-20 10:15:30 {}", literal);
+    if compiled.is_match(&padded) {
+        return Some(padded);
+    }
+
+    None
 }
 
 /// Print the color/style catalog to stdout with forced color output.
@@ -1058,5 +1410,140 @@ lines = "+1"
         assert!(!content.contains("update_mode"));
 
         unsafe { restore_env("XDG_CONFIG_HOME", prev) };
+    }
+
+    // === show_profile tests ===
+
+    fn show_output(config: Option<(&Config, PathBuf)>, name: &str) -> String {
+        let mut buf = Vec::new();
+        show_profile_to(config, name, &mut buf).unwrap();
+        strip_ansi(&String::from_utf8(buf).unwrap())
+    }
+
+    #[test]
+    fn show_profile_builtin_logs() {
+        let output = show_output(None, "logs");
+        assert!(output.contains("Profile: logs (built-in)"), "Got: {output}");
+        assert!(output.contains("Rules:"), "Got: {output}");
+        assert!(output.contains("(?i)error"), "Got: {output}");
+        assert!(output.contains("bold+red"), "Got: {output}");
+        assert!(output.contains("Auto-select: .log"), "Got: {output}");
+        assert!(output.contains("Preview:"), "Got: {output}");
+        assert!(output.contains("ERROR"), "Preview should contain ERROR line. Got: {output}");
+        assert!(output.contains("WARN"), "Preview should contain WARN line. Got: {output}");
+    }
+
+    #[test]
+    fn show_profile_builtin_help() {
+        let output = show_output(None, "help");
+        assert!(output.contains("Profile: help (built-in)"), "Got: {output}");
+        assert!(output.contains("(match)"), "Help profile has match-scoped rules. Got: {output}");
+        assert!(output.contains("(cap1)"), "Help profile has cap1-scoped rules. Got: {output}");
+        assert!(output.contains("Preview:"), "Got: {output}");
+        assert!(output.contains("Usage: myapp"), "Preview should contain usage line. Got: {output}");
+    }
+
+    #[test]
+    fn show_profile_not_found() {
+        let result = show_profile_to(None, "nonexistent", &mut Vec::new());
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("not found"), "Got: {msg}");
+        assert!(msg.contains("Available:"), "Got: {msg}");
+    }
+
+    #[test]
+    fn show_profile_user_defined() {
+        let config = Config {
+            rules: vec![],
+            profiles: {
+                let mut p = HashMap::new();
+                p.insert(
+                    "myprofile".to_string(),
+                    ProfileConfig {
+                        rules: vec![
+                            RuleConfig {
+                                pattern: "ERROR".to_string(),
+                                style: "red".to_string(),
+                                scope: "line".to_string(),
+                            },
+                            RuleConfig {
+                                pattern: "SUCCESS".to_string(),
+                                style: "green".to_string(),
+                                scope: "match".to_string(),
+                            },
+                        ],
+                        trigger: vec!["ALERT".to_string()],
+                        before: Some("5".to_string()),
+                        after: Some("10".to_string()),
+                        lines: Some("+1".to_string()),
+                        extensions: vec!["myext".to_string()],
+                    },
+                );
+                p
+            },
+            default_profile: None,
+            theme: None,
+            syntax_map: HashMap::new(),
+            update_check_interval_days: 7,
+            update_mode: None,
+            default_file_mode: None,
+        };
+        let output = show_output(
+            Some((&config, PathBuf::from("/tmp/test.toml"))),
+            "myprofile",
+        );
+        assert!(output.contains("Profile: myprofile"), "Got: {output}");
+        assert!(!output.contains("(built-in)"), "User profile should not be built-in. Got: {output}");
+        assert!(output.contains("ERROR"), "Got: {output}");
+        assert!(output.contains("(match)"), "Got: {output}");
+        assert!(output.contains("Triggers:"), "Got: {output}");
+        assert!(output.contains("ALERT"), "Got: {output}");
+        assert!(output.contains("before: 5"), "Got: {output}");
+        assert!(output.contains("after: 10"), "Got: {output}");
+        assert!(output.contains("Lines: +1"), "Got: {output}");
+        assert!(output.contains("Auto-select: .myext"), "Got: {output}");
+        assert!(output.contains("Config: /tmp/test.toml"), "Got: {output}");
+        assert!(output.contains("Preview:"), "Got: {output}");
+    }
+
+    #[test]
+    fn show_profile_user_overrides_builtin() {
+        let config = Config {
+            rules: vec![],
+            profiles: {
+                let mut p = HashMap::new();
+                p.insert(
+                    "logs".to_string(),
+                    ProfileConfig {
+                        rules: vec![RuleConfig {
+                            pattern: "CUSTOM".to_string(),
+                            style: "blue".to_string(),
+                            scope: "line".to_string(),
+                        }],
+                        trigger: vec![],
+                        before: None,
+                        after: None,
+                        lines: None,
+                        extensions: vec![],
+                    },
+                );
+                p
+            },
+            default_profile: None,
+            theme: None,
+            syntax_map: HashMap::new(),
+            update_check_interval_days: 7,
+            update_mode: None,
+            default_file_mode: None,
+        };
+        let output = show_output(
+            Some((&config, PathBuf::from("/tmp/test.toml"))),
+            "logs",
+        );
+        assert!(output.contains("Profile: logs"), "Got: {output}");
+        assert!(!output.contains("(built-in)"), "User override should not show built-in. Got: {output}");
+        assert!(output.contains("CUSTOM"), "Got: {output}");
+        assert!(output.contains("blue"), "Got: {output}");
     }
 }
