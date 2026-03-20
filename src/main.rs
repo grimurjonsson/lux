@@ -1,4 +1,4 @@
-use std::io::{self, BufRead, BufWriter, Write};
+use std::io::{self, BufRead, BufWriter, IsTerminal, Write};
 use std::path::Path;
 
 use anyhow::Context;
@@ -49,6 +49,10 @@ fn run() -> anyhow::Result<()> {
                     ProfileAction::List { config } => {
                         let cfg = config.as_deref().or(cli.config.as_deref()).map(Path::new);
                         config::print_profiles(cfg)?;
+                    }
+                    ProfileAction::Show { name, config } => {
+                        let cfg = config.as_deref().or(cli.config.as_deref()).map(Path::new);
+                        config::show_profile(cfg, name)?;
                     }
                     ProfileAction::SetDefault { name, config } => {
                         let cfg = config.as_deref().or(cli.config.as_deref()).map(Path::new);
@@ -250,6 +254,7 @@ fn run() -> anyhow::Result<()> {
     };
     let filter = LineFilter::new(&cli.include, &cli.exclude, strip)?;
 
+    let stdout_is_terminal = io::stdout().is_terminal();
     let stdout = io::stdout().lock();
     let mut writer = BufWriter::new(stdout);
 
@@ -374,6 +379,9 @@ fn run() -> anyhow::Result<()> {
                     }
                     OutputDecision::Suppress => {}
                 }
+                if stdout_is_terminal {
+                    writer.flush()?;
+                }
             }
         } else {
             for line in all_lines {
@@ -383,6 +391,9 @@ fn run() -> anyhow::Result<()> {
                 }
                 let output = engine.apply(&line);
                 writeln!(writer, "{output}")?;
+                if stdout_is_terminal {
+                    writer.flush()?;
+                }
             }
         }
     }

@@ -158,6 +158,14 @@ pub enum ProfileAction {
         #[arg(long)]
         config: Option<String>,
     },
+    /// Show details for a specific profile with a preview
+    Show {
+        /// Profile name to show
+        name: String,
+        /// Path to a custom config file (overrides XDG discovery)
+        #[arg(long)]
+        config: Option<String>,
+    },
     /// Set the default profile (used when no --profile or extension match)
     SetDefault {
         /// Profile name to set as default
@@ -419,6 +427,29 @@ mod tests {
                 assert_eq!(name.as_deref(), Some("django"));
             }
             _ => panic!("expected Profile Delete"),
+        }
+    }
+
+    #[test]
+    fn test_profile_show_subcommand() {
+        let cli = Cli::try_parse_from(["lux", "profile", "show", "logs"]).unwrap();
+        match cli.command {
+            Some(Command::Profile { action: ProfileAction::Show { name, .. } }) => {
+                assert_eq!(name, "logs");
+            }
+            _ => panic!("expected Profile Show"),
+        }
+    }
+
+    #[test]
+    fn test_profile_show_with_config() {
+        let cli = Cli::try_parse_from(["lux", "profile", "show", "logs", "--config", "/tmp/my.toml"]).unwrap();
+        match cli.command {
+            Some(Command::Profile { action: ProfileAction::Show { name, config } }) => {
+                assert_eq!(name, "logs");
+                assert_eq!(config.as_deref(), Some("/tmp/my.toml"));
+            }
+            _ => panic!("expected Profile Show"),
         }
     }
 
