@@ -1176,3 +1176,24 @@ fn config_subcommand_help() {
         .success()
         .stdout(predicates::str::contains("default-file-mode"));
 }
+
+#[test]
+fn list_profiles_shows_local_lux_profiles() {
+    let tmp = TempDir::new().unwrap();
+    // Create a fake git repo with .lux/profiles.toml
+    std::fs::create_dir(tmp.path().join(".git")).unwrap();
+    let lux_dir = tmp.path().join(".lux");
+    std::fs::create_dir(&lux_dir).unwrap();
+    std::fs::write(
+        lux_dir.join("profiles.toml"),
+        "[profiles.integration-test]\n[[profiles.integration-test.rules]]\npattern = \"HELLO\"\nstyle = \"green\"\n",
+    ).unwrap();
+
+    lux()
+        .arg("--list-profiles")
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("integration-test"))
+        .stdout(predicate::str::contains("(local:"));
+}

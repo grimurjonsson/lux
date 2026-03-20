@@ -152,6 +152,15 @@ fn run() -> anyhow::Result<()> {
         }
     }
 
+    // Local profiles: repo root, then CWD — later inserts win
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let local_profiles = config::discover_local_profiles(&cwd)?;
+    for (profiles, _) in &local_profiles {
+        for (k, v) in profiles {
+            merged_profiles.insert(k.clone(), v.clone());
+        }
+    }
+
     // Determine active profile: --no-profile disables all auto-detection;
     // otherwise: explicit --profile > extension auto-select > content sniff > default_profile > None
     let mut stdin_buffer: Vec<String> = Vec::new();
