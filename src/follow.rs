@@ -50,7 +50,7 @@ impl FileIdentity {
 /// Returns the number of lines read.
 fn read_new_lines(
     reader: &mut BufReader<File>,
-    engine: &Engine,
+    engine: &mut Engine,
     writer: &mut BufWriter<impl Write>,
     mut trigger: Option<&mut TriggerFilter>,
     filter: Option<&LineFilter>,
@@ -105,7 +105,7 @@ pub fn run(
     path: &Path,
     mode: FollowMode,
     file: File,
-    engine: &Engine,
+    engine: &mut Engine,
     writer: &mut BufWriter<impl Write>,
     mut trigger: Option<TriggerFilter>,
     filter: Option<&LineFilter>,
@@ -293,7 +293,7 @@ pub fn run(
 /// Polls every 1 second until the file appears, then transitions to normal Name-mode following.
 pub fn run_waiting(
     path: &Path,
-    engine: &Engine,
+    engine: &mut Engine,
     writer: &mut BufWriter<impl Write>,
     trigger: Option<TriggerFilter>,
     filter: Option<&LineFilter>,

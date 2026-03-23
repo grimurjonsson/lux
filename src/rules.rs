@@ -14,6 +14,8 @@ pub enum MatchScope {
     Match,
     /// Color a specific capture group (Phase 2)
     Capture(usize),
+    /// Color the next N lines after a match (not the matching line itself)
+    Next(usize),
 }
 
 /// A compiled coloring rule: a regex pattern, a style, a scope, and a priority.
@@ -35,6 +37,9 @@ pub fn parse_scope(s: &str) -> Option<MatchScope> {
         "match" => Some(MatchScope::Match),
         _ if s.starts_with("cap") => {
             s[3..].parse::<usize>().ok().map(MatchScope::Capture)
+        }
+        _ if s.starts_with("next") => {
+            s[4..].parse::<usize>().ok().filter(|&n| n > 0).map(MatchScope::Next)
         }
         _ => None,
     }
@@ -289,6 +294,23 @@ mod tests {
     fn test_parse_rule_capture_scope() {
         let rule = parse_rule("(\\d+):blue:cap1", 0).unwrap();
         assert_eq!(rule.scope, MatchScope::Capture(1));
+    }
+
+    #[test]
+    fn test_parse_rule_next_scope() {
+        let rule = parse_rule("^---:cyan:next1", 0).unwrap();
+        assert_eq!(rule.scope, MatchScope::Next(1));
+    }
+
+    #[test]
+    fn test_parse_rule_next_scope_multi() {
+        let rule = parse_rule("HEADER:green:next3", 0).unwrap();
+        assert_eq!(rule.scope, MatchScope::Next(3));
+    }
+
+    #[test]
+    fn test_parse_scope_next_zero_invalid() {
+        assert!(parse_scope("next0").is_none());
     }
 
     #[test]

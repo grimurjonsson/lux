@@ -443,6 +443,7 @@ fn run_edit(
                         crate::rules::MatchScope::Line => "line".to_string(),
                         crate::rules::MatchScope::Match => "match".to_string(),
                         crate::rules::MatchScope::Capture(n) => format!("cap{n}"),
+                        crate::rules::MatchScope::Next(n) => format!("next{n}"),
                     };
                     let parts: Vec<&str> = input.rsplitn(3, ':').collect();
                     let (pattern, style) = match parts.len() {
@@ -829,6 +830,7 @@ fn parse_raw_rule_input(
                 crate::rules::MatchScope::Line => "line".to_string(),
                 crate::rules::MatchScope::Match => "match".to_string(),
                 crate::rules::MatchScope::Capture(n) => format!("cap{n}"),
+                crate::rules::MatchScope::Next(n) => format!("next{n}"),
             };
             let parts: Vec<&str> = input.rsplitn(3, ':').collect();
             let (pattern, style) = match parts.len() {
