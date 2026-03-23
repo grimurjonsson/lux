@@ -32,7 +32,7 @@ impl Drop for TerminalGuard {
 /// Lines are filtered, colorized, and displayed interactively.
 pub fn run(
     file_path: &Path,
-    engine: &Engine,
+    engine: &mut Engine,
     filter: &LineFilter,
     trigger: &mut TriggerFilter,
     profile_name: Option<&str>,
@@ -82,7 +82,7 @@ pub fn run(
 /// Colorize lines through the existing Engine/Filter/Trigger pipeline.
 fn colorize_lines(
     raw_lines: &[String],
-    engine: &Engine,
+    engine: &mut Engine,
     filter: &LineFilter,
     trigger: &mut TriggerFilter,
 ) -> Vec<String> {

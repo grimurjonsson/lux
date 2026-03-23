@@ -152,6 +152,15 @@ fn run() -> anyhow::Result<()> {
         }
     }
 
+    // Local profiles: repo root, then CWD — later inserts win
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let local_profiles = config::discover_local_profiles(&cwd)?;
+    for (profiles, _) in &local_profiles {
+        for (k, v) in profiles {
+            merged_profiles.insert(k.clone(), v.clone());
+        }
+    }
+
     // Determine active profile: --no-profile disables all auto-detection;
     // otherwise: explicit --profile > extension auto-select > content sniff > default_profile > None
     let mut stdin_buffer: Vec<String> = Vec::new();
@@ -217,7 +226,7 @@ fn run() -> anyhow::Result<()> {
         })
     };
 
-    let engine = Engine::new(rules, color_mode.color_enabled(), syntax_highlighter);
+    let mut engine = Engine::new(rules, color_mode.color_enabled(), syntax_highlighter);
 
     // Merge trigger settings: CLI flags override profile settings
     let trigger_patterns: Vec<String> = if !cli.trigger.is_empty() {
@@ -299,7 +308,7 @@ fn run() -> anyhow::Result<()> {
             let rule_count = engine.rule_count();
             lux::pager::run(
                 path,
-                &engine,
+                &mut engine,
                 &filter,
                 &mut trigger_filter,
                 active_profile_name.as_deref(),
@@ -311,34 +320,34 @@ fn run() -> anyhow::Result<()> {
             let mut file = std::fs::File::open(path)
                 .with_context(|| format!("cannot open '{file_path}'"))?;
             let initial_lines = read_initial(&mut file, &line_spec)?;
-            print_lines_filtered(&initial_lines, &engine, &mut writer, &mut trigger_filter, &filter)?;
+            print_lines_filtered(&initial_lines, &mut engine, &mut writer, &mut trigger_filter, &filter)?;
             let trigger_opt = if trigger_filter.is_active() {
                 Some(trigger_filter)
             } else {
                 None
             };
             let filter_opt = if filter.is_active() { Some(&filter) } else { None };
-            follow::run(path, follow::FollowMode::Descriptor, file, &engine, &mut writer, trigger_opt, filter_opt)?;
+            follow::run(path, follow::FollowMode::Descriptor, file, &mut engine, &mut writer, trigger_opt, filter_opt)?;
         } else if is_print_and_exit {
             // Print-and-exit: file + explicit -n + no follow flag
             let mut file = std::fs::File::open(path)
                 .with_context(|| format!("cannot open '{file_path}'"))?;
             let initial_lines = read_initial(&mut file, &line_spec)?;
-            print_lines_filtered(&initial_lines, &engine, &mut writer, &mut trigger_filter, &filter)?;
+            print_lines_filtered(&initial_lines, &mut engine, &mut writer, &mut trigger_filter, &filter)?;
             // Done -- return without following
         } else {
             // -F: follow by name, file may not exist yet
             match std::fs::File::open(path) {
                 Ok(mut file) => {
                     let initial_lines = read_initial(&mut file, &line_spec)?;
-                    print_lines_filtered(&initial_lines, &engine, &mut writer, &mut trigger_filter, &filter)?;
+                    print_lines_filtered(&initial_lines, &mut engine, &mut writer, &mut trigger_filter, &filter)?;
                     let trigger_opt = if trigger_filter.is_active() {
                         Some(trigger_filter)
                     } else {
                         None
                     };
                     let filter_opt = if filter.is_active() { Some(&filter) } else { None };
-                    follow::run(path, follow::FollowMode::Name, file, &engine, &mut writer, trigger_opt, filter_opt)?;
+                    follow::run(path, follow::FollowMode::Name, file, &mut engine, &mut writer, trigger_opt, filter_opt)?;
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                     eprintln!(
@@ -351,7 +360,7 @@ fn run() -> anyhow::Result<()> {
                         None
                     };
                     let filter_opt = if filter.is_active() { Some(&filter) } else { None };
-                    follow::run_waiting(path, &engine, &mut writer, trigger_opt, filter_opt)?;
+                    follow::run_waiting(path, &mut engine, &mut writer, trigger_opt, filter_opt)?;
                 }
                 Err(e) => return Err(e).with_context(|| format!("cannot open '{file_path}'")),
             }
@@ -428,7 +437,7 @@ fn read_initial(file: &mut std::fs::File, line_spec: &LineSpec) -> anyhow::Resul
 /// Print lines through the engine and trigger filter to the writer.
 fn print_lines_filtered(
     lines: &[String],
-    engine: &Engine,
+    engine: &mut Engine,
     writer: &mut BufWriter<impl Write>,
     trigger: &mut TriggerFilter,
     filter: &LineFilter,

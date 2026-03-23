@@ -330,6 +330,68 @@ pub fn find_profile_by_extension(
     None
 }
 
+/// Walk parent directories from `start` looking for a `.git` entry.
+///
+/// Returns the directory containing `.git`, or `None` if not found.
+/// Supports both regular repos (.git directory) and worktrees (.git file).
+pub fn find_repo_root(start: &Path) -> Option<PathBuf> {
+    let mut current = start.to_path_buf();
+    loop {
+        if current.join(".git").exists() {
+            return Some(current);
+        }
+        if !current.pop() {
+            return None;
+        }
+    }
+}
+
+/// Discover local profile files from CWD and repo root.
+///
+/// Returns (profiles, source_path) tuples ordered lowest-to-highest priority:
+/// repo root `.lux/profiles.toml` first, then CWD `.lux_profiles.toml`.
+/// During merge, later entries override earlier ones (HashMap::insert).
+///
+/// Missing files are silently skipped. Malformed TOML is an error.
+pub fn discover_local_profiles(
+    cwd: &Path,
+) -> Result<Vec<(HashMap<String, ProfileConfig>, PathBuf)>> {
+    let mut result = Vec::new();
+
+    // 1. Repo root: <repo>/.lux/profiles.toml (lower priority)
+    if let Some(repo_root) = find_repo_root(cwd) {
+        let repo_profiles_path = repo_root.join(".lux").join("profiles.toml");
+        if let Some(entry) = load_local_profiles(&repo_profiles_path)? {
+            result.push(entry);
+        }
+    }
+
+    // 2. CWD: .lux_profiles.toml (higher priority — inserted last so it wins)
+    let cwd_profiles_path = cwd.join(".lux_profiles.toml");
+    if let Some(entry) = load_local_profiles(&cwd_profiles_path)? {
+        result.push(entry);
+    }
+
+    Ok(result)
+}
+
+/// Load profiles from a local TOML file. Returns None if file doesn't exist.
+fn load_local_profiles(
+    path: &Path,
+) -> Result<Option<(HashMap<String, ProfileConfig>, PathBuf)>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| anyhow!("failed to read {}: {e}", path.display()))?;
+    let config: Config = toml::from_str(&content)
+        .map_err(|e| anyhow!("failed to parse {}: {e}", path.display()))?;
+    if config.profiles.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some((config.profiles, path.to_path_buf())))
+}
+
 /// Print available profiles from the config file to stdout.
 ///
 /// Loads config from the given explicit path or the default XDG location.
@@ -337,9 +399,16 @@ pub fn find_profile_by_extension(
 pub fn print_profiles(config_path: Option<&Path>) -> Result<()> {
     owo_colors::set_override(true);
     let config = load_config(config_path)?;
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let local_profiles = discover_local_profiles(&cwd)?;
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
-    let result = print_profiles_to(config_path, config.as_ref().map(|(c, p)| (c, p.clone())), &mut out);
+    let result = print_profiles_to(
+        config_path,
+        config.as_ref().map(|(c, p)| (c, p.clone())),
+        &local_profiles,
+        &mut out,
+    );
     owo_colors::set_override(false);
     result
 }
@@ -348,6 +417,7 @@ pub fn print_profiles(config_path: Option<&Path>) -> Result<()> {
 pub fn print_profiles_to(
     _explicit_path: Option<&Path>,
     config: Option<(&Config, PathBuf)>,
+    local_profiles: &[(HashMap<String, ProfileConfig>, PathBuf)],
     out: &mut dyn Write,
 ) -> Result<()> {
     let builtins = builtin_profiles();
@@ -358,27 +428,56 @@ pub fn print_profiles_to(
         .map(|(cfg, _)| cfg.profiles.keys().collect())
         .unwrap_or_default();
 
-    // Determine which built-in profiles to show (those not overridden by user)
+    // Collect local profile names for deduplication
+    let local_profile_names: std::collections::HashSet<String> = local_profiles
+        .iter()
+        .flat_map(|(profiles, _)| profiles.keys().cloned())
+        .collect();
+
+    // Determine which built-in profiles to show (those not overridden by user or local)
     let visible_builtins: Vec<&String> = builtins
         .keys()
-        .filter(|k| !user_profile_names.contains(k))
+        .filter(|k| !user_profile_names.contains(k) && !local_profile_names.contains(*k))
         .collect();
 
     match config {
         None => {
-            if visible_builtins.is_empty() {
+            let has_local = !local_profiles.is_empty();
+            if visible_builtins.is_empty() && !has_local {
                 writeln!(out, "No config file found.")?;
                 if let Some(default) = default_config_path() {
                     writeln!(out, "Default location: {}", default.display())?;
                 }
             } else {
-                // Show built-in profiles even without config
                 writeln!(out, "{}", "Available profiles:".bold())?;
                 writeln!(out)?;
+
+                // Show local profiles
+                let mut local_names: Vec<(&String, &ProfileConfig, &Path)> = Vec::new();
+                for (profiles, source) in local_profiles {
+                    for (name, profile) in profiles {
+                        local_names.push((name, profile, source.as_path()));
+                    }
+                }
+                if !local_names.is_empty() {
+                    local_names.sort_by_key(|(name, _, _)| (*name).clone());
+                    for (name, profile, source) in &local_names {
+                        let filename = source.file_name()
+                            .and_then(|f| f.to_str())
+                            .unwrap_or("profiles.toml");
+                        let tag = format!("(local: {})", filename);
+                        print_profile_entry(out, name, profile, &tag)?;
+                    }
+                    if !visible_builtins.is_empty() {
+                        writeln!(out)?;
+                    }
+                }
+
+                // Show built-in profiles not overridden by local
                 let mut names: Vec<&String> = visible_builtins;
                 names.sort();
                 for name in &names {
-                    print_profile_entry(out, name, &builtins[*name], true)?;
+                    print_profile_entry(out, name, &builtins[*name], "(built-in)")?;
                 }
                 writeln!(out)?;
                 writeln!(
@@ -398,26 +497,53 @@ pub fn print_profiles_to(
         Some((cfg, path)) => {
             let has_user_profiles = !cfg.profiles.is_empty();
             let has_builtin_profiles = !visible_builtins.is_empty();
+            let has_local = !local_profiles.is_empty();
 
-            if !has_user_profiles && !has_builtin_profiles {
+            if !has_user_profiles && !has_builtin_profiles && !has_local {
                 writeln!(out, "No profiles defined in {}", path.display())?;
             } else {
                 writeln!(out, "{}", "Available profiles:".bold())?;
                 writeln!(out)?;
 
-                // Show user-defined profiles first
+                // Show local profiles first
+                let mut local_names: Vec<(&String, &ProfileConfig, &Path)> = Vec::new();
+                for (profiles, source) in local_profiles {
+                    for (name, profile) in profiles {
+                        if !cfg.profiles.contains_key(name) {
+                            local_names.push((name, profile, source.as_path()));
+                        }
+                    }
+                }
+                if !local_names.is_empty() {
+                    local_names.sort_by_key(|(name, _, _)| (*name).clone());
+                    for (name, profile, source) in &local_names {
+                        let filename = source.file_name()
+                            .and_then(|f| f.to_str())
+                            .unwrap_or("profiles.toml");
+                        let tag = format!("(local: {})", filename);
+                        print_profile_entry(out, name, profile, &tag)?;
+                    }
+                    writeln!(out)?;
+                }
+
+                // Show user-defined profiles
                 let mut names: Vec<&String> = cfg.profiles.keys().collect();
                 names.sort();
-                for name in &names {
-                    let profile = &cfg.profiles[*name];
-                    print_profile_entry(out, name, profile, false)?;
+                if !names.is_empty() {
+                    for name in &names {
+                        let profile = &cfg.profiles[*name];
+                        print_profile_entry(out, name, profile, "")?;
+                    }
+                    writeln!(out)?;
                 }
 
                 // Show built-in profiles not overridden by user
                 let mut builtin_names: Vec<&String> = visible_builtins;
                 builtin_names.sort();
-                for name in &builtin_names {
-                    print_profile_entry(out, name, &builtins[*name], true)?;
+                if !builtin_names.is_empty() {
+                    for name in &builtin_names {
+                        print_profile_entry(out, name, &builtins[*name], "(built-in)")?;
+                    }
                 }
 
                 writeln!(out)?;
@@ -448,12 +574,12 @@ fn print_profile_entry(
     out: &mut dyn Write,
     name: &str,
     profile: &ProfileConfig,
-    is_builtin: bool,
+    source_tag: &str,
 ) -> Result<()> {
-    if is_builtin {
-        writeln!(out, "  {} {}", name.cyan().bold(), "(built-in)".dimmed())?;
-    } else {
+    if source_tag.is_empty() {
         writeln!(out, "  {}", name.cyan().bold())?;
+    } else {
+        writeln!(out, "  {} {}", name.cyan().bold(), source_tag.dimmed())?;
     }
 
     for rc in &profile.rules {
@@ -494,9 +620,16 @@ fn print_profile_entry(
 pub fn show_profile(config_path: Option<&Path>, name: &str) -> Result<()> {
     owo_colors::set_override(true);
     let config = load_config(config_path)?;
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let local_profiles = discover_local_profiles(&cwd)?;
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
-    let result = show_profile_to(config.as_ref().map(|(c, p)| (c, p.clone())), name, &mut out);
+    let result = show_profile_to(
+        config.as_ref().map(|(c, p)| (c, p.clone())),
+        &local_profiles,
+        name,
+        &mut out,
+    );
     owo_colors::set_override(false);
     result
 }
@@ -504,27 +637,33 @@ pub fn show_profile(config_path: Option<&Path>, name: &str) -> Result<()> {
 /// Write profile details and preview to the given writer (testable version).
 pub fn show_profile_to(
     config: Option<(&Config, PathBuf)>,
+    local_profiles: &[(HashMap<String, ProfileConfig>, PathBuf)],
     name: &str,
     out: &mut dyn Write,
 ) -> Result<()> {
     let builtins = builtin_profiles();
 
     // Find the profile
-    let (profile, is_builtin) = find_profile_by_name(
+    let (profile, source) = find_profile_by_name(
         name,
         config.as_ref().map(|(c, _)| *c),
+        local_profiles,
         &builtins,
     )?;
 
     // Header
-    if is_builtin {
-        writeln!(
-            out,
-            "{} {} {}",
-            "Profile:".bold(),
-            name.cyan().bold(),
-            "(built-in)".dimmed()
-        )?;
+    let source_tag = match &source {
+        ProfileSource::BuiltIn => Some("(built-in)".to_string()),
+        ProfileSource::Local(path) => {
+            let filename = path.file_name()
+                .and_then(|f| f.to_str())
+                .unwrap_or("profiles.toml");
+            Some(format!("(local: {})", filename))
+        }
+        ProfileSource::Global => None,
+    };
+    if let Some(ref tag) = source_tag {
+        writeln!(out, "{} {} {}", "Profile:".bold(), name.cyan().bold(), tag.dimmed())?;
     } else {
         writeln!(out, "{} {}", "Profile:".bold(), name.cyan().bold())?;
     }
@@ -585,17 +724,19 @@ pub fn show_profile_to(
         writeln!(out)?;
     }
 
-    // Config path for user profiles
-    if !is_builtin {
-        if let Some((_, ref path)) = config {
-            writeln!(
-                out,
-                "  {} {}",
-                "Config:".bold(),
-                path.display().dimmed()
-            )?;
+    // Source path
+    match &source {
+        ProfileSource::Global => {
+            if let Some((_, ref path)) = config {
+                writeln!(out, "  {} {}", "Config:".bold(), path.display().dimmed())?;
+                writeln!(out)?;
+            }
+        }
+        ProfileSource::Local(path) => {
+            writeln!(out, "  {} {}", "Config:".bold(), path.display().dimmed())?;
             writeln!(out)?;
         }
+        ProfileSource::BuiltIn => {}
     }
 
     // Preview
@@ -609,7 +750,7 @@ pub fn show_profile_to(
                     rules.push(rule);
                 }
             }
-            let engine = Engine::new(rules, true, None);
+            let mut engine = Engine::new(rules, true, None);
 
             writeln!(out, "  {}", "Preview:".bold())?;
             for line in &example_lines {
@@ -622,26 +763,43 @@ pub fn show_profile_to(
     Ok(())
 }
 
-/// Find a profile by name from user config or builtins.
+/// Profile source for display purposes.
+pub enum ProfileSource {
+    BuiltIn,
+    Global,
+    Local(PathBuf),
+}
+
+/// Find a profile by name from user config, local profiles, or builtins.
 fn find_profile_by_name(
     name: &str,
     config: Option<&Config>,
+    local_profiles: &[(HashMap<String, ProfileConfig>, PathBuf)],
     builtins: &HashMap<String, ProfileConfig>,
-) -> Result<(ProfileConfig, bool)> {
-    // Check user profiles first (they override builtins)
+) -> Result<(ProfileConfig, ProfileSource)> {
+    // Check local profiles first (highest priority, last entry wins)
+    for (profiles, source) in local_profiles.iter().rev() {
+        if let Some(p) = profiles.get(name) {
+            return Ok((p.clone(), ProfileSource::Local(source.clone())));
+        }
+    }
+    // Check user global config
     if let Some(cfg) = config {
         if let Some(p) = cfg.profiles.get(name) {
-            return Ok((p.clone(), false));
+            return Ok((p.clone(), ProfileSource::Global));
         }
     }
     // Check builtins
     if let Some(p) = builtins.get(name) {
-        return Ok((p.clone(), true));
+        return Ok((p.clone(), ProfileSource::BuiltIn));
     }
     // Not found
     let mut available: Vec<String> = builtins.keys().cloned().collect();
     if let Some(cfg) = config {
         available.extend(cfg.profiles.keys().cloned());
+    }
+    for (profiles, _) in local_profiles {
+        available.extend(profiles.keys().cloned());
     }
     available.sort();
     available.dedup();
@@ -740,6 +898,10 @@ fn generate_example_lines(profile: &ProfileConfig) -> Vec<String> {
                     lines.push(line);
                 }
             }
+            // For next scope, add a sample "next" line so the preview shows the effect
+            if rule.scope.starts_with("next") {
+                lines.push(format!("  (this line would be styled {})", rule.style));
+            }
         }
     }
 
@@ -757,21 +919,26 @@ fn synthesize_example(pattern: &str, compiled: &regex::Regex) -> Option<String> 
         .replace("(?i)", "")
         .replace("(?x)", "");
 
-    // Extract literal characters by removing common metacharacters
+    // Extract literal characters by removing common metacharacters.
+    // Quantifiers (+, *, {n}) repeat the last emitted character.
     let mut literal = String::new();
+    let mut last_char: Option<char> = None;
     let mut chars = cleaned.chars().peekable();
     while let Some(c) = chars.next() {
         match c {
             '\\' => {
                 // Handle escape sequences
                 if let Some(&next) = chars.peek() {
-                    match next {
-                        'd' => { literal.push('0'); chars.next(); }
-                        'w' => { literal.push('x'); chars.next(); }
-                        's' => { literal.push(' '); chars.next(); }
-                        'b' | 'B' => { chars.next(); } // word boundary, skip
-                        _ => { literal.push(next); chars.next(); } // literal escape
-                    }
+                    let ch = match next {
+                        'd' => '0',
+                        'w' => 'x',
+                        's' => ' ',
+                        'b' | 'B' => { chars.next(); continue; }
+                        other => other,
+                    };
+                    chars.next();
+                    literal.push(ch);
+                    last_char = Some(ch);
                 }
             }
             '(' | ')' => {} // grouping, skip
@@ -787,29 +954,60 @@ fn synthesize_example(pattern: &str, compiled: &regex::Regex) -> Option<String> 
                 }
                 if let Some(ch) = class_char {
                     literal.push(ch);
+                    last_char = Some(ch);
                 }
             }
             '^' | '$' => {} // anchors, skip
-            '+' | '?' => {} // quantifiers, skip
-            '*' => {} // quantifier on previous, skip
+            '+' => {
+                // Repeat last character several times
+                if let Some(ch) = last_char {
+                    for _ in 0..19 { literal.push(ch); }
+                }
+            }
+            '*' => {
+                // Repeat last character several times (zero or more)
+                if let Some(ch) = last_char {
+                    for _ in 0..19 { literal.push(ch); }
+                }
+            }
+            '?' => {} // optional, already emitted once
             '.' => {
                 // Check if followed by * or + (wildcard)
                 if chars.peek() == Some(&'*') || chars.peek() == Some(&'+') {
                     literal.push_str(" sample text");
                     chars.next(); // consume the quantifier
+                    last_char = None;
                 } else {
                     literal.push('x');
+                    last_char = Some('x');
                 }
             }
             '{' => {
-                // Skip quantifier like {2} or {1,3}
+                // Parse quantifier like {2} or {1,3} and repeat last char
+                let mut num_str = String::new();
                 while let Some(&ch) = chars.peek() {
                     chars.next();
                     if ch == '}' { break; }
+                    if ch == ',' { break; } // take the minimum
+                    if ch.is_ascii_digit() { num_str.push(ch); }
+                }
+                // Skip rest if we stopped at comma
+                if !num_str.is_empty() {
+                    if let Ok(n) = num_str.parse::<usize>() {
+                        if let Some(ch) = last_char {
+                            // Already emitted once, add n-1 more
+                            for _ in 1..n { literal.push(ch); }
+                        }
+                    }
+                }
+                // Consume remaining until }
+                while let Some(&ch) = chars.peek() {
+                    if ch == '}' { chars.next(); break; }
+                    chars.next();
                 }
             }
-            '|' => { literal.push(' '); } // alternation, use space
-            _ => { literal.push(c); }
+            '|' => { literal.push(' '); last_char = None; }
+            _ => { literal.push(c); last_char = Some(c); }
         }
     }
 
@@ -818,15 +1016,15 @@ fn synthesize_example(pattern: &str, compiled: &regex::Regex) -> Option<String> 
         return None;
     }
 
-    // Build a candidate line and verify the regex matches it
+    // Try the literal as-is first (important for anchored patterns like ^-+$)
+    if compiled.is_match(&literal) {
+        return Some(literal);
+    }
+
+    // Try with a prefix for context
     let candidate = format!("Example: {}", literal);
     if compiled.is_match(&candidate) {
         return Some(candidate);
-    }
-
-    // Try just the literal itself
-    if compiled.is_match(&literal) {
-        return Some(format!("Example: {}", literal));
     }
 
     // Last resort: wrap in a realistic-looking line
@@ -1097,6 +1295,7 @@ style = "blue"
         print_profiles_to(
             None,
             Some((&load_config(Some(config_path)).unwrap().unwrap().0, config_path.to_path_buf())),
+            &[],
             &mut buf,
         )
         .unwrap();
@@ -1108,7 +1307,7 @@ style = "blue"
         let tmp = TempDir::new().unwrap();
         let nonexistent = tmp.path().join("nonexistent.toml");
         let mut buf = Vec::new();
-        print_profiles_to(Some(&nonexistent), None, &mut buf).unwrap();
+        print_profiles_to(Some(&nonexistent), None, &[], &mut buf).unwrap();
         let output = strip_ansi(&String::from_utf8(buf).unwrap());
         // Even without a config file, built-in profiles are shown
         assert!(output.contains("logs"), "Expected built-in logs profile. Got: {output}");
@@ -1158,7 +1357,7 @@ style = "red"
         .unwrap();
 
         let mut buf = Vec::new();
-        print_profiles_to(None, Some((&load_config(Some(&config_path)).unwrap().unwrap().0, config_path.clone())), &mut buf).unwrap();
+        print_profiles_to(None, Some((&load_config(Some(&config_path)).unwrap().unwrap().0, config_path.clone())), &[], &mut buf).unwrap();
         let output = strip_ansi(&String::from_utf8(buf).unwrap());
         // Built-in profiles should still be shown
         assert!(output.contains("logs"), "Expected built-in logs profile. Got: {output}");
@@ -1218,6 +1417,27 @@ lines = "+1"
         // Split at the next profile entry (indicated by "(built-in)" tag for built-in profiles)
         let unittest_before_next = unittest_section.split("(built-in)").next().unwrap_or(unittest_section);
         assert!(!unittest_before_next.contains("style:"), "unittest-errors should not show style rules. Got: {output}");
+    }
+
+    #[test]
+    fn print_profile_entry_local_tag() {
+        let mut buf = Vec::new();
+        let profile = ProfileConfig {
+            rules: vec![RuleConfig {
+                pattern: "X".to_string(),
+                style: "red".to_string(),
+                scope: "line".to_string(),
+            }],
+            trigger: vec![],
+            before: None,
+            after: None,
+            lines: None,
+            extensions: vec![],
+        };
+        print_profile_entry(&mut buf, "myprof", &profile, "(local: .lux_profiles.toml)").unwrap();
+        let output = strip_ansi(&String::from_utf8(buf).unwrap());
+        assert!(output.contains("myprof"), "Got: {output}");
+        assert!(output.contains("(local: .lux_profiles.toml)"), "Got: {output}");
     }
 
     // === print_colors tests ===
@@ -1327,6 +1547,7 @@ lines = "+1"
         print_profiles_to(
             None,
             Some((&config, PathBuf::from("/tmp/test.toml"))),
+            &[],
             &mut buf,
         )
         .unwrap();
@@ -1416,7 +1637,7 @@ lines = "+1"
 
     fn show_output(config: Option<(&Config, PathBuf)>, name: &str) -> String {
         let mut buf = Vec::new();
-        show_profile_to(config, name, &mut buf).unwrap();
+        show_profile_to(config, &[], name, &mut buf).unwrap();
         strip_ansi(&String::from_utf8(buf).unwrap())
     }
 
@@ -1445,7 +1666,7 @@ lines = "+1"
 
     #[test]
     fn show_profile_not_found() {
-        let result = show_profile_to(None, "nonexistent", &mut Vec::new());
+        let result = show_profile_to(None, &[], "nonexistent", &mut Vec::new());
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("not found"), "Got: {msg}");
@@ -1508,6 +1729,33 @@ lines = "+1"
     }
 
     #[test]
+    fn find_repo_root_finds_git_dir() {
+        let tmp = TempDir::new().unwrap();
+        let sub = tmp.path().join("a").join("b");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::create_dir(tmp.path().join(".git")).unwrap();
+        let result = find_repo_root(&sub);
+        assert_eq!(result, Some(tmp.path().to_path_buf()));
+    }
+
+    #[test]
+    fn find_repo_root_finds_git_file_worktree() {
+        let tmp = TempDir::new().unwrap();
+        let sub = tmp.path().join("a");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(tmp.path().join(".git"), "gitdir: /some/path").unwrap();
+        let result = find_repo_root(&sub);
+        assert_eq!(result, Some(tmp.path().to_path_buf()));
+    }
+
+    #[test]
+    fn find_repo_root_none_when_absent() {
+        let tmp = TempDir::new().unwrap();
+        let result = find_repo_root(tmp.path());
+        assert!(result.is_none());
+    }
+
+    #[test]
     fn show_profile_user_overrides_builtin() {
         let config = Config {
             rules: vec![],
@@ -1545,5 +1793,182 @@ lines = "+1"
         assert!(!output.contains("(built-in)"), "User override should not show built-in. Got: {output}");
         assert!(output.contains("CUSTOM"), "Got: {output}");
         assert!(output.contains("blue"), "Got: {output}");
+    }
+
+    #[test]
+    fn discover_local_profiles_cwd_file_only() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join(".lux_profiles.toml"),
+            "[profiles.myprof]\n[[profiles.myprof.rules]]\npattern = \"X\"\nstyle = \"red\"\n",
+        ).unwrap();
+        let result = discover_local_profiles(tmp.path()).unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result[0].0.contains_key("myprof"));
+        assert!(result[0].1.ends_with(".lux_profiles.toml"));
+    }
+
+    #[test]
+    fn discover_local_profiles_repo_root_only() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir(tmp.path().join(".git")).unwrap();
+        let lux_dir = tmp.path().join(".lux");
+        std::fs::create_dir(&lux_dir).unwrap();
+        std::fs::write(
+            lux_dir.join("profiles.toml"),
+            "[profiles.repoprof]\n[[profiles.repoprof.rules]]\npattern = \"Y\"\nstyle = \"blue\"\n",
+        ).unwrap();
+        let sub = tmp.path().join("src");
+        std::fs::create_dir(&sub).unwrap();
+        let result = discover_local_profiles(&sub).unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result[0].0.contains_key("repoprof"));
+    }
+
+    #[test]
+    fn discover_local_profiles_both_files() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir(tmp.path().join(".git")).unwrap();
+        let lux_dir = tmp.path().join(".lux");
+        std::fs::create_dir(&lux_dir).unwrap();
+        std::fs::write(
+            lux_dir.join("profiles.toml"),
+            "[profiles.repoprof]\n[[profiles.repoprof.rules]]\npattern = \"Y\"\nstyle = \"blue\"\n",
+        ).unwrap();
+        std::fs::write(
+            tmp.path().join(".lux_profiles.toml"),
+            "[profiles.cwdprof]\n[[profiles.cwdprof.rules]]\npattern = \"Z\"\nstyle = \"green\"\n",
+        ).unwrap();
+        let result = discover_local_profiles(tmp.path()).unwrap();
+        assert_eq!(result.len(), 2);
+        assert!(result[0].0.contains_key("repoprof"), "First entry should be repo root");
+        assert!(result[1].0.contains_key("cwdprof"), "Second entry should be CWD");
+    }
+
+    #[test]
+    fn discover_local_profiles_neither_file() {
+        let tmp = TempDir::new().unwrap();
+        let result = discover_local_profiles(tmp.path()).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn discover_local_profiles_malformed_toml_errors() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join(".lux_profiles.toml"), "[[bad toml\n").unwrap();
+        let result = discover_local_profiles(tmp.path());
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains(".lux_profiles.toml"), "Error should mention file path. Got: {msg}");
+    }
+
+    #[test]
+    fn discover_local_profiles_cwd_overrides_repo_root() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir(tmp.path().join(".git")).unwrap();
+        let lux_dir = tmp.path().join(".lux");
+        std::fs::create_dir(&lux_dir).unwrap();
+        std::fs::write(
+            lux_dir.join("profiles.toml"),
+            "[profiles.shared]\n[[profiles.shared.rules]]\npattern = \"REPO\"\nstyle = \"blue\"\n",
+        ).unwrap();
+        std::fs::write(
+            tmp.path().join(".lux_profiles.toml"),
+            "[profiles.shared]\n[[profiles.shared.rules]]\npattern = \"CWD\"\nstyle = \"red\"\n",
+        ).unwrap();
+        let result = discover_local_profiles(tmp.path()).unwrap();
+        let mut merged = HashMap::new();
+        for (profiles, _) in &result {
+            for (k, v) in profiles {
+                merged.insert(k.clone(), v.clone());
+            }
+        }
+        assert_eq!(merged["shared"].rules[0].pattern, "CWD");
+    }
+
+    #[test]
+    fn discover_local_profiles_ignores_non_profile_fields() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join(".lux_profiles.toml"),
+            "default_profile = \"ignored\"\ntheme = \"ignored\"\n\n[profiles.real]\n[[profiles.real.rules]]\npattern = \"X\"\nstyle = \"red\"\n",
+        ).unwrap();
+        let result = discover_local_profiles(tmp.path()).unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result[0].0.contains_key("real"));
+    }
+
+    #[test]
+    fn show_profile_finds_local_profile() {
+        let local_profiles = vec![
+            (
+                {
+                    let mut m = HashMap::new();
+                    m.insert("localprof".to_string(), ProfileConfig {
+                        rules: vec![RuleConfig {
+                            pattern: "FOUND".to_string(),
+                            style: "green".to_string(),
+                            scope: "line".to_string(),
+                        }],
+                        trigger: vec![],
+                        before: None,
+                        after: None,
+                        lines: None,
+                        extensions: vec![],
+                    });
+                    m
+                },
+                PathBuf::from("/project/.lux_profiles.toml"),
+            ),
+        ];
+
+        let mut buf = Vec::new();
+        show_profile_to(None, &local_profiles, "localprof", &mut buf).unwrap();
+        let output = strip_ansi(&String::from_utf8(buf).unwrap());
+        assert!(output.contains("Profile: localprof"), "Got: {output}");
+        assert!(output.contains("(local:"), "Should show local source. Got: {output}");
+        assert!(output.contains("FOUND"), "Should show rule pattern. Got: {output}");
+        assert!(output.contains("Preview:"), "Should show preview. Got: {output}");
+    }
+
+    #[test]
+    fn print_profiles_shows_local_profiles() {
+        let tmp = TempDir::new().unwrap();
+        let config_path = tmp.path().join("config.toml");
+        std::fs::write(&config_path, "").unwrap();
+
+        let local_profiles = vec![
+            (
+                {
+                    let mut m = HashMap::new();
+                    m.insert("local-prof".to_string(), ProfileConfig {
+                        rules: vec![RuleConfig {
+                            pattern: "LOCAL".to_string(),
+                            style: "green".to_string(),
+                            scope: "line".to_string(),
+                        }],
+                        trigger: vec![],
+                        before: None,
+                        after: None,
+                        lines: None,
+                        extensions: vec![],
+                    });
+                    m
+                },
+                PathBuf::from("/repo/.lux/profiles.toml"),
+            ),
+        ];
+
+        let config = load_config(Some(&config_path)).unwrap().unwrap();
+        let mut buf = Vec::new();
+        print_profiles_to(
+            None,
+            Some((&config.0, config_path.clone())),
+            &local_profiles,
+            &mut buf,
+        ).unwrap();
+        let output = strip_ansi(&String::from_utf8(buf).unwrap());
+        assert!(output.contains("local-prof"), "Got: {output}");
+        assert!(output.contains("(local:"), "Should show local tag. Got: {output}");
     }
 }
