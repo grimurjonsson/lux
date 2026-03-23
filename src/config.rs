@@ -459,13 +459,18 @@ pub fn print_profiles_to(
                         local_names.push((name, profile, source.as_path()));
                     }
                 }
-                local_names.sort_by_key(|(name, _, _)| (*name).clone());
-                for (name, profile, source) in &local_names {
-                    let filename = source.file_name()
-                        .and_then(|f| f.to_str())
-                        .unwrap_or("profiles.toml");
-                    let tag = format!("(local: {})", filename);
-                    print_profile_entry(out, name, profile, &tag)?;
+                if !local_names.is_empty() {
+                    local_names.sort_by_key(|(name, _, _)| (*name).clone());
+                    for (name, profile, source) in &local_names {
+                        let filename = source.file_name()
+                            .and_then(|f| f.to_str())
+                            .unwrap_or("profiles.toml");
+                        let tag = format!("(local: {})", filename);
+                        print_profile_entry(out, name, profile, &tag)?;
+                    }
+                    if !visible_builtins.is_empty() {
+                        writeln!(out)?;
+                    }
                 }
 
                 // Show built-in profiles not overridden by local
@@ -500,15 +505,7 @@ pub fn print_profiles_to(
                 writeln!(out, "{}", "Available profiles:".bold())?;
                 writeln!(out)?;
 
-                // Show user-defined profiles first
-                let mut names: Vec<&String> = cfg.profiles.keys().collect();
-                names.sort();
-                for name in &names {
-                    let profile = &cfg.profiles[*name];
-                    print_profile_entry(out, name, profile, "")?;
-                }
-
-                // Show local profiles
+                // Show local profiles first
                 let mut local_names: Vec<(&String, &ProfileConfig, &Path)> = Vec::new();
                 for (profiles, source) in local_profiles {
                     for (name, profile) in profiles {
@@ -517,20 +514,36 @@ pub fn print_profiles_to(
                         }
                     }
                 }
-                local_names.sort_by_key(|(name, _, _)| (*name).clone());
-                for (name, profile, source) in &local_names {
-                    let filename = source.file_name()
-                        .and_then(|f| f.to_str())
-                        .unwrap_or("profiles.toml");
-                    let tag = format!("(local: {})", filename);
-                    print_profile_entry(out, name, profile, &tag)?;
+                if !local_names.is_empty() {
+                    local_names.sort_by_key(|(name, _, _)| (*name).clone());
+                    for (name, profile, source) in &local_names {
+                        let filename = source.file_name()
+                            .and_then(|f| f.to_str())
+                            .unwrap_or("profiles.toml");
+                        let tag = format!("(local: {})", filename);
+                        print_profile_entry(out, name, profile, &tag)?;
+                    }
+                    writeln!(out)?;
+                }
+
+                // Show user-defined profiles
+                let mut names: Vec<&String> = cfg.profiles.keys().collect();
+                names.sort();
+                if !names.is_empty() {
+                    for name in &names {
+                        let profile = &cfg.profiles[*name];
+                        print_profile_entry(out, name, profile, "")?;
+                    }
+                    writeln!(out)?;
                 }
 
                 // Show built-in profiles not overridden by user
                 let mut builtin_names: Vec<&String> = visible_builtins;
                 builtin_names.sort();
-                for name in &builtin_names {
-                    print_profile_entry(out, name, &builtins[*name], "(built-in)")?;
+                if !builtin_names.is_empty() {
+                    for name in &builtin_names {
+                        print_profile_entry(out, name, &builtins[*name], "(built-in)")?;
+                    }
                 }
 
                 writeln!(out)?;
@@ -737,7 +750,7 @@ pub fn show_profile_to(
                     rules.push(rule);
                 }
             }
-            let engine = Engine::new(rules, true, None);
+            let mut engine = Engine::new(rules, true, None);
 
             writeln!(out, "  {}", "Preview:".bold())?;
             for line in &example_lines {
@@ -885,6 +898,10 @@ fn generate_example_lines(profile: &ProfileConfig) -> Vec<String> {
                     lines.push(line);
                 }
             }
+            // For next scope, add a sample "next" line so the preview shows the effect
+            if rule.scope.starts_with("next") {
+                lines.push(format!("  (this line would be styled {})", rule.style));
+            }
         }
     }
 
@@ -902,21 +919,26 @@ fn synthesize_example(pattern: &str, compiled: &regex::Regex) -> Option<String> 
         .replace("(?i)", "")
         .replace("(?x)", "");
 
-    // Extract literal characters by removing common metacharacters
+    // Extract literal characters by removing common metacharacters.
+    // Quantifiers (+, *, {n}) repeat the last emitted character.
     let mut literal = String::new();
+    let mut last_char: Option<char> = None;
     let mut chars = cleaned.chars().peekable();
     while let Some(c) = chars.next() {
         match c {
             '\\' => {
                 // Handle escape sequences
                 if let Some(&next) = chars.peek() {
-                    match next {
-                        'd' => { literal.push('0'); chars.next(); }
-                        'w' => { literal.push('x'); chars.next(); }
-                        's' => { literal.push(' '); chars.next(); }
-                        'b' | 'B' => { chars.next(); } // word boundary, skip
-                        _ => { literal.push(next); chars.next(); } // literal escape
-                    }
+                    let ch = match next {
+                        'd' => '0',
+                        'w' => 'x',
+                        's' => ' ',
+                        'b' | 'B' => { chars.next(); continue; }
+                        other => other,
+                    };
+                    chars.next();
+                    literal.push(ch);
+                    last_char = Some(ch);
                 }
             }
             '(' | ')' => {} // grouping, skip
@@ -932,29 +954,60 @@ fn synthesize_example(pattern: &str, compiled: &regex::Regex) -> Option<String> 
                 }
                 if let Some(ch) = class_char {
                     literal.push(ch);
+                    last_char = Some(ch);
                 }
             }
             '^' | '$' => {} // anchors, skip
-            '+' | '?' => {} // quantifiers, skip
-            '*' => {} // quantifier on previous, skip
+            '+' => {
+                // Repeat last character several times
+                if let Some(ch) = last_char {
+                    for _ in 0..19 { literal.push(ch); }
+                }
+            }
+            '*' => {
+                // Repeat last character several times (zero or more)
+                if let Some(ch) = last_char {
+                    for _ in 0..19 { literal.push(ch); }
+                }
+            }
+            '?' => {} // optional, already emitted once
             '.' => {
                 // Check if followed by * or + (wildcard)
                 if chars.peek() == Some(&'*') || chars.peek() == Some(&'+') {
                     literal.push_str(" sample text");
                     chars.next(); // consume the quantifier
+                    last_char = None;
                 } else {
                     literal.push('x');
+                    last_char = Some('x');
                 }
             }
             '{' => {
-                // Skip quantifier like {2} or {1,3}
+                // Parse quantifier like {2} or {1,3} and repeat last char
+                let mut num_str = String::new();
                 while let Some(&ch) = chars.peek() {
                     chars.next();
                     if ch == '}' { break; }
+                    if ch == ',' { break; } // take the minimum
+                    if ch.is_ascii_digit() { num_str.push(ch); }
+                }
+                // Skip rest if we stopped at comma
+                if !num_str.is_empty() {
+                    if let Ok(n) = num_str.parse::<usize>() {
+                        if let Some(ch) = last_char {
+                            // Already emitted once, add n-1 more
+                            for _ in 1..n { literal.push(ch); }
+                        }
+                    }
+                }
+                // Consume remaining until }
+                while let Some(&ch) = chars.peek() {
+                    if ch == '}' { chars.next(); break; }
+                    chars.next();
                 }
             }
-            '|' => { literal.push(' '); } // alternation, use space
-            _ => { literal.push(c); }
+            '|' => { literal.push(' '); last_char = None; }
+            _ => { literal.push(c); last_char = Some(c); }
         }
     }
 
@@ -963,15 +1016,15 @@ fn synthesize_example(pattern: &str, compiled: &regex::Regex) -> Option<String> 
         return None;
     }
 
-    // Build a candidate line and verify the regex matches it
+    // Try the literal as-is first (important for anchored patterns like ^-+$)
+    if compiled.is_match(&literal) {
+        return Some(literal);
+    }
+
+    // Try with a prefix for context
     let candidate = format!("Example: {}", literal);
     if compiled.is_match(&candidate) {
         return Some(candidate);
-    }
-
-    // Try just the literal itself
-    if compiled.is_match(&literal) {
-        return Some(format!("Example: {}", literal));
     }
 
     // Last resort: wrap in a realistic-looking line
