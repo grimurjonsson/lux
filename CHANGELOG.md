@@ -5,6 +5,19 @@ All notable changes to lux will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.12] - 2026-03-25
+Added duration parsing for --slow (e.g. `--slow 200ms`), a `next` scope to color lines after a trigger match, local profile discovery, and a `lux profile show` command.
+
+### Added
+- add duration parsing for --slow flag
+- add next scope to color N lines after a trigger match
+- lux profile show profile_name added
+- improve the README.md
+
+### Other
+- chore: add .worktrees/ to gitignore
+- local profiles
+
 ## [0.1.11] - 2026-03-23
 Added support for coloring N lines after a trigger match and loading profiles from local project directories.
 
