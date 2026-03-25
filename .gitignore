@@ -1,3 +1,5 @@
 /target
 /release-binaries
 .superpowers/
+.DS_Store
+.worktrees/
