@@ -12,6 +12,7 @@ use lux::filter::LineFilter;
 use lux::follow;
 use lux::output::detect_color_mode;
 use lux::rules::build_rules_with_config;
+use lux::slow::SlowLineAnnotator;
 use lux::syntax::SyntaxHighlighter;
 use lux::tail::{self, LineSpec};
 use lux::trigger::{OutputDecision, TriggerFilter};
@@ -263,6 +264,27 @@ fn run() -> anyhow::Result<()> {
     };
     let filter = LineFilter::new(&cli.include, &cli.exclude, strip)?;
 
+    // Resolve --slow: CLI flag overrides profile setting
+    let slow_threshold_str = cli.slow.as_deref().or_else(|| {
+        profile.and_then(|p| p.slow.as_deref())
+    });
+    let slow_style_str = if cli.slow.is_some() {
+        &cli.slow_style
+    } else if let Some(ps) = profile.and_then(|p| p.slow_style.as_deref()) {
+        ps
+    } else {
+        &cli.slow_style
+    };
+    let mut slow_annotator = slow_threshold_str
+        .map(|s| {
+            let threshold = lux::slow::parse_duration(s)
+                .unwrap_or_else(|e| {
+                    eprintln!("lux: invalid --slow duration '{s}': {e}");
+                    std::process::exit(1);
+                });
+            SlowLineAnnotator::new(threshold, slow_style_str, color_mode.color_enabled())
+        });
+
     let stdout_is_terminal = io::stdout().is_terminal();
     let stdout = io::stdout().lock();
     let mut writer = BufWriter::new(stdout);
@@ -327,7 +349,7 @@ fn run() -> anyhow::Result<()> {
                 None
             };
             let filter_opt = if filter.is_active() { Some(&filter) } else { None };
-            follow::run(path, follow::FollowMode::Descriptor, file, &mut engine, &mut writer, trigger_opt, filter_opt)?;
+            follow::run(path, follow::FollowMode::Descriptor, file, &mut engine, &mut writer, trigger_opt, filter_opt, slow_annotator)?;
         } else if is_print_and_exit {
             // Print-and-exit: file + explicit -n + no follow flag
             let mut file = std::fs::File::open(path)
@@ -347,7 +369,7 @@ fn run() -> anyhow::Result<()> {
                         None
                     };
                     let filter_opt = if filter.is_active() { Some(&filter) } else { None };
-                    follow::run(path, follow::FollowMode::Name, file, &mut engine, &mut writer, trigger_opt, filter_opt)?;
+                    follow::run(path, follow::FollowMode::Name, file, &mut engine, &mut writer, trigger_opt, filter_opt, slow_annotator)?;
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                     eprintln!(
@@ -360,7 +382,7 @@ fn run() -> anyhow::Result<()> {
                         None
                     };
                     let filter_opt = if filter.is_active() { Some(&filter) } else { None };
-                    follow::run_waiting(path, &mut engine, &mut writer, trigger_opt, filter_opt)?;
+                    follow::run_waiting(path, &mut engine, &mut writer, trigger_opt, filter_opt, slow_annotator)?;
                 }
                 Err(e) => return Err(e).with_context(|| format!("cannot open '{file_path}'")),
             }
@@ -380,10 +402,24 @@ fn run() -> anyhow::Result<()> {
                 }
                 let colored = engine.apply(&line);
                 match trigger_filter.process_line(&line, colored) {
-                    OutputDecision::Pass(s) => writeln!(writer, "{s}")?,
+                    OutputDecision::Pass(s) => {
+                        if let Some(ref mut ann) = slow_annotator {
+                            if let Some(prev) = ann.annotate(&s) {
+                                writeln!(writer, "{prev}")?;
+                            }
+                        } else {
+                            writeln!(writer, "{s}")?;
+                        }
+                    }
                     OutputDecision::Flush(lines) => {
                         for l in lines {
-                            writeln!(writer, "{l}")?;
+                            if let Some(ref mut ann) = slow_annotator {
+                                if let Some(prev) = ann.annotate(&l) {
+                                    writeln!(writer, "{prev}")?;
+                                }
+                            } else {
+                                writeln!(writer, "{l}")?;
+                            }
                         }
                     }
                     OutputDecision::Suppress => {}
@@ -399,10 +435,22 @@ fn run() -> anyhow::Result<()> {
                     continue;
                 }
                 let output = engine.apply(&line);
-                writeln!(writer, "{output}")?;
+                if let Some(ref mut ann) = slow_annotator {
+                    if let Some(prev) = ann.annotate(&output) {
+                        writeln!(writer, "{prev}")?;
+                    }
+                } else {
+                    writeln!(writer, "{output}")?;
+                }
                 if stdout_is_terminal {
                     writer.flush()?;
                 }
+            }
+        }
+        // Flush the last buffered line from the slow annotator
+        if let Some(ref mut ann) = slow_annotator {
+            if let Some(last) = ann.flush() {
+                writeln!(writer, "{last}")?;
             }
         }
     }

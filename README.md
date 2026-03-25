@@ -409,6 +409,14 @@ Options:
           
           [default: auto]
 
+      --slow <SLOW>
+          Annotate lines that took longer than this threshold to arrive. Accepts durations like: 500ms, 5s, 1m, 1m30s. Only effective in pipe and follow modes
+
+      --slow-style <SLOW_STYLE>
+          Style for slow-line annotations (default: dim+yellow)
+          
+          [default: dim+yellow]
+
   -h, --help
           Print help (see a summary with '-h')
 

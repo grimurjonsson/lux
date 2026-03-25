@@ -7,6 +7,7 @@ pub mod follow;
 pub mod output;
 pub mod pager;
 pub mod rules;
+pub mod slow;
 pub mod syntax;
 pub mod tail;
 pub mod trigger;

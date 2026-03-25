@@ -44,6 +44,10 @@ pub struct ProfileConfig {
     /// File extensions that auto-select this profile (e.g., ["md", "markdown"]).
     #[serde(default)]
     pub extensions: Vec<String>,
+    /// Slow-line timing threshold (e.g. "5s", "500ms").
+    pub slow: Option<String>,
+    /// Style for slow-line annotations (e.g. "dim+yellow").
+    pub slow_style: Option<String>,
 }
 
 /// Top-level config structure matching the TOML schema.
@@ -249,6 +253,8 @@ pub fn builtin_profiles() -> HashMap<String, ProfileConfig> {
             after: None,
             lines: None,
             extensions: vec!["log".to_string()],
+            slow: None,
+            slow_style: None,
         },
     );
     profiles.insert(
@@ -279,6 +285,8 @@ pub fn builtin_profiles() -> HashMap<String, ProfileConfig> {
             after: None,
             lines: None,
             extensions: vec![],
+            slow: None,
+            slow_style: None,
         },
     );
     profiles
@@ -1433,6 +1441,8 @@ lines = "+1"
             after: None,
             lines: None,
             extensions: vec![],
+            slow: None,
+            slow_style: None,
         };
         print_profile_entry(&mut buf, "myprof", &profile, "(local: .lux_profiles.toml)").unwrap();
         let output = strip_ansi(&String::from_utf8(buf).unwrap());
@@ -1539,6 +1549,8 @@ lines = "+1"
                         after: None,
                         lines: None,
                         extensions: vec![],
+                        slow: None,
+                        slow_style: None,
                     },
                 );
                 p
@@ -1699,6 +1711,8 @@ lines = "+1"
                         after: Some("10".to_string()),
                         lines: Some("+1".to_string()),
                         extensions: vec!["myext".to_string()],
+                        slow: None,
+                        slow_style: None,
                     },
                 );
                 p
@@ -1774,6 +1788,8 @@ lines = "+1"
                         after: None,
                         lines: None,
                         extensions: vec![],
+                        slow: None,
+                        slow_style: None,
                     },
                 );
                 p
@@ -1915,6 +1931,8 @@ lines = "+1"
                         after: None,
                         lines: None,
                         extensions: vec![],
+                        slow: None,
+                        slow_style: None,
                     });
                     m
                 },
@@ -1952,6 +1970,8 @@ lines = "+1"
                         after: None,
                         lines: None,
                         extensions: vec![],
+                        slow: None,
+                        slow_style: None,
                     });
                     m
                 },
