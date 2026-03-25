@@ -92,6 +92,16 @@ pub struct Cli {
     #[arg(long = "strip-ansi", default_value = "auto")]
     pub strip_ansi: StripAnsi,
 
+    /// Annotate lines that took longer than this threshold to arrive.
+    /// Accepts durations like: 500ms, 5s, 1m, 1m30s.
+    /// Only effective in pipe and follow modes.
+    #[arg(long)]
+    pub slow: Option<String>,
+
+    /// Style for slow-line annotations (default: dim+yellow).
+    #[arg(long, default_value = "dim+yellow")]
+    pub slow_style: String,
+
     /// File to read (positional argument)
     pub file: Option<String>,
 }
@@ -509,6 +519,36 @@ mod tests {
     #[test]
     fn test_cat_conflicts_with_follow_descriptor() {
         let result = Cli::try_parse_from(["lux", "--cat", "-f", "app.log"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_slow_flag() {
+        let cli = Cli::try_parse_from(["lux", "--slow", "5s"]).unwrap();
+        assert_eq!(cli.slow.as_deref(), Some("5s"));
+    }
+
+    #[test]
+    fn test_slow_flag_not_set() {
+        let cli = Cli::try_parse_from(["lux"]).unwrap();
+        assert!(cli.slow.is_none());
+    }
+
+    #[test]
+    fn test_slow_style_default() {
+        let cli = Cli::try_parse_from(["lux", "--slow", "5s"]).unwrap();
+        assert_eq!(cli.slow_style, "dim+yellow");
+    }
+
+    #[test]
+    fn test_slow_style_custom() {
+        let cli = Cli::try_parse_from(["lux", "--slow", "5s", "--slow-style", "bold+red"]).unwrap();
+        assert_eq!(cli.slow_style, "bold+red");
+    }
+
+    #[test]
+    fn test_slow_requires_value() {
+        let result = Cli::try_parse_from(["lux", "--slow"]);
         assert!(result.is_err());
     }
 

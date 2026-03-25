@@ -9,6 +9,7 @@ use notify::{EventKind, RecursiveMode, Watcher};
 
 use crate::engine::Engine;
 use crate::filter::LineFilter;
+use crate::slow::SlowLineAnnotator;
 use crate::trigger::{OutputDecision, TriggerFilter};
 
 /// How to follow a file.
@@ -54,6 +55,7 @@ fn read_new_lines(
     writer: &mut BufWriter<impl Write>,
     mut trigger: Option<&mut TriggerFilter>,
     filter: Option<&LineFilter>,
+    mut slow: Option<&mut SlowLineAnnotator>,
 ) -> anyhow::Result<usize> {
     let mut line = String::new();
     let mut count = 0;
@@ -74,18 +76,44 @@ fn read_new_lines(
         let colored = engine.apply(trimmed);
         if let Some(ref mut tf) = trigger {
             match tf.process_line(trimmed, colored) {
-                OutputDecision::Pass(s) => writeln!(writer, "{s}")?,
+                OutputDecision::Pass(s) => {
+                    if let Some(ref mut ann) = slow {
+                        if let Some(prev) = ann.annotate(&s) {
+                            writeln!(writer, "{prev}")?;
+                        }
+                    } else {
+                        writeln!(writer, "{s}")?;
+                    }
+                }
                 OutputDecision::Flush(lines) => {
                     for l in lines {
-                        writeln!(writer, "{l}")?;
+                        if let Some(ref mut ann) = slow {
+                            if let Some(prev) = ann.annotate(&l) {
+                                writeln!(writer, "{prev}")?;
+                            }
+                        } else {
+                            writeln!(writer, "{l}")?;
+                        }
                     }
                 }
                 OutputDecision::Suppress => {}
             }
         } else {
-            writeln!(writer, "{colored}")?;
+            if let Some(ref mut ann) = slow {
+                if let Some(prev) = ann.annotate(&colored) {
+                    writeln!(writer, "{prev}")?;
+                }
+            } else {
+                writeln!(writer, "{colored}")?;
+            }
         }
         count += 1;
+    }
+    // Flush the last buffered line from the slow annotator at end of batch
+    if let Some(ref mut ann) = slow {
+        if let Some(last) = ann.flush() {
+            writeln!(writer, "{last}")?;
+        }
     }
     if count > 0 {
         writer.flush()?;
@@ -109,6 +137,7 @@ pub fn run(
     writer: &mut BufWriter<impl Write>,
     mut trigger: Option<TriggerFilter>,
     filter: Option<&LineFilter>,
+    mut slow: Option<SlowLineAnnotator>,
 ) -> anyhow::Result<()> {
     let mut reader = BufReader::new(file);
 
@@ -150,13 +179,13 @@ pub fn run(
                                 let path_identity = FileIdentity::from_metadata(&path_meta);
                                 if !identity.matches(&path_identity) {
                                     // Rotation detected -- drain old fd first
-                                    read_new_lines(&mut reader, engine, writer, trigger.as_mut(), filter)?;
+                                    read_new_lines(&mut reader, engine, writer, trigger.as_mut(), filter, slow.as_mut())?;
 
                                     // Open new file from beginning
                                     let new_file = File::open(path)?;
                                     identity = FileIdentity::from_metadata(&new_file.metadata()?);
                                     reader = BufReader::new(new_file);
-                                    read_new_lines(&mut reader, engine, writer, trigger.as_mut(), filter)?;
+                                    read_new_lines(&mut reader, engine, writer, trigger.as_mut(), filter, slow.as_mut())?;
                                     last_pos = reader.stream_position()?;
                                     continue;
                                 }
@@ -183,7 +212,7 @@ pub fn run(
                             }
                         }
 
-                        read_new_lines(&mut reader, engine, writer, trigger.as_mut(), filter)?;
+                        read_new_lines(&mut reader, engine, writer, trigger.as_mut(), filter, slow.as_mut())?;
                         last_pos = reader.stream_position()?;
                     }
                     EventKind::Remove(_) if mode == FollowMode::Name => {
@@ -205,7 +234,7 @@ pub fn run(
                                     identity =
                                         FileIdentity::from_metadata(&new_file.metadata()?);
                                     reader = BufReader::new(new_file);
-                                    read_new_lines(&mut reader, engine, writer, trigger.as_mut(), filter)?;
+                                    read_new_lines(&mut reader, engine, writer, trigger.as_mut(), filter, slow.as_mut())?;
                                     last_pos = reader.stream_position()?;
 
                                     // Re-watch parent directory
@@ -229,7 +258,7 @@ pub fn run(
                 match mode {
                     FollowMode::Descriptor => {
                         // Try reading any pending data
-                        let count = read_new_lines(&mut reader, engine, writer, trigger.as_mut(), filter)?;
+                        let count = read_new_lines(&mut reader, engine, writer, trigger.as_mut(), filter, slow.as_mut())?;
                         if count > 0 {
                             last_pos = reader.stream_position()?;
                             consecutive_timeouts = 0;
@@ -239,7 +268,7 @@ pub fn run(
                         // and no more data to read -- exit cleanly
                         if consecutive_timeouts > 20 && !path.exists() {
                             // File deleted, no more events, try one last read
-                            let final_count = read_new_lines(&mut reader, engine, writer, trigger.as_mut(), filter)?;
+                            let final_count = read_new_lines(&mut reader, engine, writer, trigger.as_mut(), filter, slow.as_mut())?;
                             if final_count == 0 {
                                 return Ok(());
                             }
@@ -252,12 +281,12 @@ pub fn run(
                             let path_identity = FileIdentity::from_metadata(&path_meta);
                             if !identity.matches(&path_identity) {
                                 // Rotation detected
-                                read_new_lines(&mut reader, engine, writer, trigger.as_mut(), filter)?;
+                                read_new_lines(&mut reader, engine, writer, trigger.as_mut(), filter, slow.as_mut())?;
                                 let new_file = File::open(path)?;
                                 identity =
                                     FileIdentity::from_metadata(&new_file.metadata()?);
                                 reader = BufReader::new(new_file);
-                                read_new_lines(&mut reader, engine, writer, trigger.as_mut(), filter)?;
+                                read_new_lines(&mut reader, engine, writer, trigger.as_mut(), filter, slow.as_mut())?;
                                 last_pos = reader.stream_position()?;
                                 continue;
                             }
@@ -271,7 +300,7 @@ pub fn run(
                         }
 
                         // Try reading
-                        let count = read_new_lines(&mut reader, engine, writer, trigger.as_mut(), filter)?;
+                        let count = read_new_lines(&mut reader, engine, writer, trigger.as_mut(), filter, slow.as_mut())?;
                         if count > 0 {
                             last_pos = reader.stream_position()?;
                         }
@@ -280,7 +309,7 @@ pub fn run(
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 // Watcher disconnected -- do final read and exit
-                read_new_lines(&mut reader, engine, writer, trigger.as_mut(), filter)?;
+                read_new_lines(&mut reader, engine, writer, trigger.as_mut(), filter, slow.as_mut())?;
                 return Ok(());
             }
         }
@@ -297,6 +326,7 @@ pub fn run_waiting(
     writer: &mut BufWriter<impl Write>,
     trigger: Option<TriggerFilter>,
     filter: Option<&LineFilter>,
+    slow: Option<SlowLineAnnotator>,
 ) -> anyhow::Result<()> {
     // Poll until file appears
     loop {
@@ -307,7 +337,7 @@ pub fn run_waiting(
                 path.display()
             );
             let file = File::open(path)?;
-            return run(path, FollowMode::Name, file, engine, writer, trigger, filter);
+            return run(path, FollowMode::Name, file, engine, writer, trigger, filter, slow);
         }
     }
 }

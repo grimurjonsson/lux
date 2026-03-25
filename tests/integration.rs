@@ -1197,3 +1197,114 @@ fn list_profiles_shows_local_lux_profiles() {
         .stdout(predicate::str::contains("integration-test"))
         .stdout(predicate::str::contains("(local:"));
 }
+
+// === Slow-line annotation integration tests ===
+
+#[test]
+fn slow_annotation_pipe_mode() {
+    let child = StdCommand::new("sh")
+        .args(["-c", r#"echo "line one"; sleep 0.5; echo "line two""#])
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    let output = StdCommand::new(env!("CARGO_BIN_EXE_lux"))
+        .args(["--slow", "100ms", "--color", "never", "--no-profile"])
+        .stdin(child.stdout.unwrap())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // The annotation should appear on "line one" (the line BEFORE the slow gap)
+    assert!(stdout.contains("line one [took:"), "first line should have timing annotation: {stdout}");
+    assert!(stdout.contains("line two\n"), "second line should have no annotation: {stdout}");
+}
+
+#[test]
+fn slow_no_annotation_when_fast() {
+    lux()
+        .args(["--slow", "10s", "--color", "never", "--no-profile"])
+        .write_stdin("line one\nline two\nline three\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[took:").not());
+}
+
+#[test]
+fn slow_annotation_follow_mode() {
+    let dir = TempDir::new().unwrap();
+    let file_path = dir.path().join("test.log");
+    std::fs::write(&file_path, "initial line\n").unwrap();
+
+    let mut child = StdCommand::new(env!("CARGO_BIN_EXE_lux"))
+        .args([
+            "-f",
+            file_path.to_str().unwrap(),
+            "--slow", "50ms",
+            "--color", "never",
+            "--no-profile",
+        ])
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    // Wait, then append lines with a gap between them
+    std::thread::sleep(Duration::from_millis(200));
+    use std::io::Write as _;
+    let mut f = std::fs::OpenOptions::new().append(true).open(&file_path).unwrap();
+    writeln!(f, "first appended").unwrap();
+    drop(f);
+
+    std::thread::sleep(Duration::from_millis(200));
+    let mut f = std::fs::OpenOptions::new().append(true).open(&file_path).unwrap();
+    writeln!(f, "second appended").unwrap();
+    drop(f);
+
+    std::thread::sleep(Duration::from_millis(500));
+
+    // Kill the follow process
+    child.kill().ok();
+    let output = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(stdout.contains("first appended"), "should see first appended line: {stdout}");
+    assert!(stdout.contains("second appended"), "should see second appended line: {stdout}");
+}
+
+#[test]
+fn slow_with_custom_style() {
+    let child = StdCommand::new("sh")
+        .args(["-c", r#"echo "line one"; sleep 0.5; echo "line two""#])
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    let output = StdCommand::new(env!("CARGO_BIN_EXE_lux"))
+        .args(["--slow", "100ms", "--slow-style", "bold+red", "--color", "always", "--no-profile"])
+        .stdin(child.stdout.unwrap())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("[took:"), "should have timing annotation: {stdout}");
+    assert!(has_ansi_codes(&stdout), "should have colored annotation: {stdout}");
+}
+
+#[test]
+fn slow_plain_mode_no_ansi() {
+    let child = StdCommand::new("sh")
+        .args(["-c", r#"echo "line one"; sleep 0.5; echo "line two""#])
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    let output = StdCommand::new(env!("CARGO_BIN_EXE_lux"))
+        .args(["--slow", "100ms", "--color", "never", "--no-profile"])
+        .stdin(child.stdout.unwrap())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("[took:"), "should have timing annotation: {stdout}");
+    assert!(!has_ansi_codes(&stdout), "should not have ANSI codes in plain mode: {stdout}");
+}

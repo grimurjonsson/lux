@@ -486,6 +486,8 @@ mod tests {
                 after: None,
                 lines: None,
                 extensions: vec![],
+                slow: None,
+                slow_style: None,
             },
         );
         let config = Config {
@@ -519,7 +521,7 @@ mod tests {
                 let mut p = HashMap::new();
                 p.insert(
                     "spring".to_string(),
-                    ProfileConfig { rules: vec![], trigger: vec![], before: None, after: None, lines: None, extensions: vec![] },
+                    ProfileConfig { rules: vec![], trigger: vec![], before: None, after: None, lines: None, extensions: vec![], slow: None, slow_style: None },
                 );
                 p
             },
