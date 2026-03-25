@@ -244,6 +244,54 @@ lux profile clear-default
   <img src="assets/profiles.gif" alt="lux profiles demo" width="800">
 </p>
 
+### Local profiles
+
+Override or add profiles per-repo or per-directory — useful for project-specific log formats that you can commit alongside your code.
+
+Lux checks two locations (highest priority wins):
+
+| File | Scope | Typical use |
+|------|-------|-------------|
+| `.lux/profiles.toml` | Repository root | Shared team profiles — commit to git |
+| `.lux_profiles.toml` | Current directory | Personal/directory-specific overrides |
+
+The repo root is found by walking up from CWD looking for `.git`. If CWD _is_ the repo root, both files are checked and `.lux_profiles.toml` wins on name collisions.
+
+**Override chain** (highest priority first):
+
+```
+CWD/.lux_profiles.toml  >  <repo>/.lux/profiles.toml  >  ~/.config/lux/config.toml  >  built-ins
+```
+
+**Example** — add a `.lux/profiles.toml` to your repo:
+
+```toml
+[profiles.myapp]
+extensions = ["log"]
+slow = "5s"
+
+[[profiles.myapp.rules]]
+pattern = "ERROR|FATAL"
+style = "bold+red"
+scope = "line"
+
+[[profiles.myapp.rules]]
+pattern = "req_id=(\\S+)"
+style = "cyan"
+scope = "cap1"
+```
+
+Now anyone who clones the repo gets the `myapp` profile automatically when viewing `.log` files:
+
+```bash
+lux -f app.log              # auto-selects myapp profile via extension match
+lux -p myapp -f app.log     # or select explicitly
+```
+
+Local files use the same `[profiles.*]` format as the global config. Other top-level fields (`default_profile`, `theme`, etc.) are ignored in local files.
+
+Run `lux --list-profiles` to see all profiles and where they come from — local profiles are tagged with their source path.
+
 ### Configuration
 
 Config file location: `~/.config/lux/config.toml` (or `$XDG_CONFIG_HOME/lux/config.toml`).
