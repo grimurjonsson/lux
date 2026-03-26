@@ -205,6 +205,86 @@ pub fn render_segments(
     result
 }
 
+/// Validate capture group references in a template string.
+///
+/// Scans for `$N` references (skipping `$$`), and returns an error if any
+/// reference exceeds the available capture count.
+fn validate_captures(template: &str, capture_count: usize) -> Result<()> {
+    let chars: Vec<char> = template.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        if chars[i] == '$' {
+            if i + 1 >= chars.len() {
+                // Bare $ at end — fine
+                break;
+            } else if chars[i + 1] == '$' {
+                // Escaped $$ — skip
+                i += 2;
+            } else if chars[i + 1].is_ascii_digit() {
+                let start = i + 1;
+                let mut end = start;
+                while end < chars.len() && chars[end].is_ascii_digit() {
+                    end += 1;
+                }
+                let idx_str: String = chars[start..end].iter().collect();
+                let idx: usize = idx_str.parse().unwrap();
+                if idx >= capture_count {
+                    bail!(
+                        "capture reference ${} is out of range — \
+                         the pattern has {} capture group{} (valid: $0..=${})",
+                        idx,
+                        capture_count.saturating_sub(1),
+                        if capture_count.saturating_sub(1) == 1 { "" } else { "s" },
+                        capture_count.saturating_sub(1)
+                    );
+                }
+                i = end;
+            } else {
+                // Bare $ before non-digit
+                i += 1;
+            }
+        } else {
+            i += 1;
+        }
+    }
+
+    Ok(())
+}
+
+/// Validate a template string at parse time.
+///
+/// - Checks that `$N` references don't exceed the capture count
+/// - Validates all style tags parse correctly
+/// - Returns the parsed segments for later rendering
+pub fn validate_template(template: &str, capture_count: usize) -> Result<Vec<Segment>> {
+    validate_captures(template, capture_count)?;
+    parse_tags(template)
+}
+
+/// Interpolate capture values into pre-parsed segments, then render.
+///
+/// This is the main entry point for rendering a complete template at runtime.
+/// Because tags are pre-parsed, capture values containing `[` or `]` won't be
+/// misinterpreted as markup.
+pub fn render_template(
+    segments: &[Segment],
+    caps: &Captures,
+    default_style: Option<Style>,
+    color_enabled: bool,
+) -> String {
+    // Interpolate captures into each segment's text
+    let interpolated: Vec<Segment> = segments
+        .iter()
+        .map(|seg| match seg {
+            Segment::Plain(text) => Segment::Plain(interpolate(text, caps)),
+            Segment::Styled(text, style) => Segment::Styled(interpolate(text, caps), *style),
+        })
+        .collect();
+
+    render_segments(&interpolated, default_style, color_enabled)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -347,5 +427,38 @@ mod tests {
         assert_eq!(segments.len(), 2);
         assert!(matches!(&segments[0], Segment::Plain(t) if t == "text"));
         assert!(matches!(&segments[1], Segment::Plain(t) if t == "more"));
+    }
+
+    // --- Task 3: Full Template Rendering ---
+
+    #[test]
+    fn test_render_template_full_pipeline() {
+        let re = Regex::new(r"ERROR (\w+)").unwrap();
+        let text = "ERROR auth: failed";
+        let caps = re.captures(text).unwrap();
+        let template = "--- [red]$0[/] in [cyan]$1[/] ---";
+        let segments = validate_template(template, re.captures_len()).unwrap();
+        let rendered = render_template(&segments, &caps, None, false);
+        assert_eq!(rendered, "--- ERROR auth in auth ---");
+    }
+
+    #[test]
+    fn test_validate_captures_out_of_range() {
+        // Pattern has 2 groups => capture_count = 3 ($0, $1, $2)
+        // $3 should be out of range
+        let result = validate_template("[red]$3[/]", 2);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("out of range"),
+            "error should mention 'out of range', got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_validate_captures_valid() {
+        // capture_count=3 means $0, $1, $2 are all valid
+        let result = validate_template("[red]$0[/] and $1", 3);
+        assert!(result.is_ok());
     }
 }
