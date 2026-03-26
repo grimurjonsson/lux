@@ -172,6 +172,8 @@ impl Engine {
                 }).collect()
             }
             MatchScope::Next(_) => vec![], // handled in apply() directly
+            MatchScope::InsertBefore(_) | MatchScope::InsertAfter(_)
+            | MatchScope::Prepend(_) | MatchScope::Append(_) => vec![],
         }
     }
 

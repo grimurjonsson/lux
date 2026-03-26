@@ -4,6 +4,23 @@ use regex::Regex;
 
 use crate::color;
 use crate::config::Config;
+use crate::markup::{self, Segment};
+
+/// A pre-parsed template for text-insertion rules.
+///
+/// Contains the original template string and its pre-parsed segments
+/// (from markup tag parsing). Equality is based on the template string only.
+#[derive(Debug, Clone)]
+pub struct InsertTemplate {
+    pub template: String,
+    pub segments: Vec<Segment>,
+}
+
+impl PartialEq for InsertTemplate {
+    fn eq(&self, other: &Self) -> bool {
+        self.template == other.template
+    }
+}
 
 /// Defines which part of the line gets colored when a rule matches.
 #[derive(Debug, Clone, PartialEq)]
@@ -16,6 +33,14 @@ pub enum MatchScope {
     Capture(usize),
     /// Color the next N lines after a match (not the matching line itself)
     Next(usize),
+    /// Insert a template line before the matching line
+    InsertBefore(InsertTemplate),
+    /// Insert a template line after the matching line
+    InsertAfter(InsertTemplate),
+    /// Prepend template text to the beginning of the matching line
+    Prepend(InsertTemplate),
+    /// Append template text to the end of the matching line
+    Append(InsertTemplate),
 }
 
 /// A compiled coloring rule: a regex pattern, a style, a scope, and a priority.
@@ -35,6 +60,9 @@ pub fn parse_scope(s: &str) -> Option<MatchScope> {
     match s {
         "line" => Some(MatchScope::Line),
         "match" => Some(MatchScope::Match),
+        // Insert keywords are recognized but return None — they need a template,
+        // so they're handled by the keyword-boundary scanner in parse_rule().
+        "insert-before" | "insert-after" | "prepend" | "append" => None,
         _ if s.starts_with("cap") => {
             s[3..].parse::<usize>().ok().map(MatchScope::Capture)
         }
@@ -52,13 +80,90 @@ pub fn parse_scope(s: &str) -> Option<MatchScope> {
 /// Uses right-to-left splitting to handle colons inside regex patterns.
 /// If 3 parts are found, checks if the last is a valid scope; if not,
 /// re-interprets as `PATTERN_WITH_COLON:STYLE`.
+/// Insert scope keywords, ordered longest-first so scanning is unambiguous.
+const INSERT_KEYWORDS: &[(&str, &str)] = &[
+    (":insert-before:", "insert-before"),
+    (":insert-after:", "insert-after"),
+    (":prepend:", "prepend"),
+    (":append:", "append"),
+];
+
 pub fn parse_rule(input: &str, priority: usize) -> Result<Rule> {
-    let input = input.trim();
-    if input.is_empty() {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
         bail!("empty rule specification");
     }
 
-    // Split from the right to handle colons in the pattern
+    // --- Phase 1: scan for rightmost insert keyword ---
+    // Scan the *trimmed-start* input (preserving trailing content for templates).
+    // We look for the rightmost occurrence of any `:insert-before:`, `:insert-after:`,
+    // `:prepend:`, or `:append:` keyword. If found, everything after the keyword is
+    // the template (verbatim, including any colons), everything before is PATTERN:STYLE.
+    let trimmed_start = input.trim_start();
+    let mut best: Option<(usize, usize, &str)> = None; // (pos, keyword_len, scope_name)
+    for &(needle, scope_name) in INSERT_KEYWORDS {
+        if let Some(pos) = trimmed_start.rfind(needle) {
+            match best {
+                None => best = Some((pos, needle.len(), scope_name)),
+                Some((prev_pos, _, _)) if pos > prev_pos => {
+                    best = Some((pos, needle.len(), scope_name));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    if let Some((pos, kw_len, scope_name)) = best {
+        // Left side = PATTERN:STYLE (everything before the keyword's leading colon)
+        let left = &trimmed_start[..pos];
+        // Template = everything after the keyword (after its trailing colon)
+        let template = &trimmed_start[pos + kw_len..];
+
+        if template.is_empty() {
+            bail!("missing template text after scope '{scope_name}'");
+        }
+
+        // Split left into PATTERN:STYLE using rfind(':')
+        let (pattern_str, style_str) = if let Some(colon) = left.rfind(':') {
+            (&left[..colon], &left[colon + 1..])
+        } else {
+            bail!("invalid rule '{trimmed_start}': expected PATTERN:STYLE:{scope_name}:TEMPLATE format (no colon found in pattern:style)");
+        };
+
+        let compiled = Regex::new(pattern_str)
+            .map_err(|e| anyhow::anyhow!("invalid regex pattern '{pattern_str}': {e}"))?;
+
+        let parsed_style = if style_str.is_empty() {
+            Style::new()
+        } else {
+            color::parse_style(style_str)?
+        };
+
+        let segments = markup::validate_template(template, compiled.captures_len())?;
+        let tmpl = InsertTemplate {
+            template: template.to_string(),
+            segments,
+        };
+
+        let scope = match scope_name {
+            "insert-before" => MatchScope::InsertBefore(tmpl),
+            "insert-after" => MatchScope::InsertAfter(tmpl),
+            "prepend" => MatchScope::Prepend(tmpl),
+            "append" => MatchScope::Append(tmpl),
+            _ => unreachable!(),
+        };
+
+        return Ok(Rule {
+            pattern: compiled,
+            style: parsed_style,
+            scope,
+            priority,
+        });
+    }
+
+    // --- Phase 2: no insert keyword found — fall back to existing 2/3-part parsing ---
+    // Use fully-trimmed input for non-insert rules.
+    let input = trimmed;
     let parts: Vec<&str> = input.rsplitn(3, ':').collect();
 
     let (pattern_str, style_str, scope) = match parts.len() {
@@ -539,5 +644,89 @@ mod tests {
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("no config file found"), "Got: {msg}");
+    }
+
+    // === Insert scope parsing tests ===
+
+    #[test]
+    fn test_parse_rule_insert_before() {
+        let rule = parse_rule("ERROR::insert-before:--- alert ---", 0).unwrap();
+        assert!(rule.pattern.is_match("ERROR"));
+        match &rule.scope {
+            MatchScope::InsertBefore(tmpl) => {
+                assert_eq!(tmpl.template, "--- alert ---");
+            }
+            other => panic!("expected InsertBefore, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_rule_insert_after() {
+        let rule = parse_rule("FATAL::insert-after:[red]^^^[/]", 0).unwrap();
+        assert!(rule.pattern.is_match("FATAL"));
+        match &rule.scope {
+            MatchScope::InsertAfter(tmpl) => {
+                assert_eq!(tmpl.template, "[red]^^^[/]");
+                assert_eq!(tmpl.segments.len(), 1);
+            }
+            other => panic!("expected InsertAfter, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_rule_prepend() {
+        let rule = parse_rule("WARN:yellow:prepend:⚠ ", 0).unwrap();
+        assert!(rule.pattern.is_match("WARN"));
+        assert_ne!(rule.style, Style::new(), "style should not be default");
+        match &rule.scope {
+            MatchScope::Prepend(tmpl) => {
+                assert_eq!(tmpl.template, "⚠ ");
+            }
+            other => panic!("expected Prepend, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_rule_append() {
+        let rule = parse_rule("DEBUG::append: [dim](debug)[/]", 0).unwrap();
+        assert!(rule.pattern.is_match("DEBUG"));
+        match &rule.scope {
+            MatchScope::Append(tmpl) => {
+                assert_eq!(tmpl.template, " [dim](debug)[/]");
+            }
+            other => panic!("expected Append, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_rule_insert_with_colons_in_template() {
+        let rule = parse_rule("ERROR::insert-before:--- 12:34:56 ---", 0).unwrap();
+        assert!(rule.pattern.is_match("ERROR"));
+        match &rule.scope {
+            MatchScope::InsertBefore(tmpl) => {
+                assert_eq!(tmpl.template, "--- 12:34:56 ---");
+            }
+            other => panic!("expected InsertBefore, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_rule_insert_missing_template() {
+        let result = parse_rule("ERROR::insert-before:", 0);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("missing template"), "Got: {msg}");
+    }
+
+    #[test]
+    fn test_parse_rule_backward_compat_two_parts() {
+        let rule = parse_rule("ERROR:red", 0).unwrap();
+        assert_eq!(rule.scope, MatchScope::Line);
+    }
+
+    #[test]
+    fn test_parse_rule_backward_compat_three_parts() {
+        let rule = parse_rule("ERROR:red:match", 0).unwrap();
+        assert_eq!(rule.scope, MatchScope::Match);
     }
 }

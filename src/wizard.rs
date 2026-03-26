@@ -444,6 +444,10 @@ fn run_edit(
                         crate::rules::MatchScope::Match => "match".to_string(),
                         crate::rules::MatchScope::Capture(n) => format!("cap{n}"),
                         crate::rules::MatchScope::Next(n) => format!("next{n}"),
+                        crate::rules::MatchScope::InsertBefore(_) => "insert-before".to_string(),
+                        crate::rules::MatchScope::InsertAfter(_) => "insert-after".to_string(),
+                        crate::rules::MatchScope::Prepend(_) => "prepend".to_string(),
+                        crate::rules::MatchScope::Append(_) => "append".to_string(),
                     };
                     let parts: Vec<&str> = input.rsplitn(3, ':').collect();
                     let (pattern, style) = match parts.len() {
@@ -831,6 +835,10 @@ fn parse_raw_rule_input(
                 crate::rules::MatchScope::Match => "match".to_string(),
                 crate::rules::MatchScope::Capture(n) => format!("cap{n}"),
                 crate::rules::MatchScope::Next(n) => format!("next{n}"),
+                crate::rules::MatchScope::InsertBefore(_) => "insert-before".to_string(),
+                crate::rules::MatchScope::InsertAfter(_) => "insert-after".to_string(),
+                crate::rules::MatchScope::Prepend(_) => "prepend".to_string(),
+                crate::rules::MatchScope::Append(_) => "append".to_string(),
             };
             let parts: Vec<&str> = input.rsplitn(3, ':').collect();
             let (pattern, style) = match parts.len() {
