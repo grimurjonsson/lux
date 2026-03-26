@@ -149,20 +149,14 @@ pub fn parse_tags(template: &str) -> Result<Vec<Segment>> {
     }
 
     // Handle remaining text
+    if let Some((_, ref tag_name)) = current_style {
+        bail!(
+            "unclosed style tag '[{}]' — add [/] to close it",
+            tag_name
+        );
+    }
     if !current_text.is_empty() {
-        if let Some((_, ref tag_name)) = current_style {
-            bail!(
-                "unclosed style tag '[{}]' — add [/] to close it",
-                tag_name
-            );
-        }
         segments.push(Segment::Plain(current_text));
-    } else if current_style.is_some() {
-        // Tag was opened but no text followed — still unclosed
-        // (e.g., "text[red]") — the tag had no content, which is not an error
-        // since the text is empty. But technically the tag is unclosed.
-        // Per spec, unclosed tag with text after it is an error.
-        // If there's no text, there's nothing to style, so it's fine.
     }
 
     Ok(segments)
@@ -389,6 +383,27 @@ mod tests {
             err.contains("unclosed"),
             "error should mention 'unclosed', got: {err}"
         );
+        assert!(
+            err.contains("red"),
+            "error should include tag name 'red', got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_parse_unclosed_tag_no_text() {
+        let result = parse_tags("[red]");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("unclosed"), "Got: {msg}");
+        assert!(msg.contains("red"), "Error should include tag name. Got: {msg}");
+    }
+
+    #[test]
+    fn test_parse_unclosed_tag_text_before() {
+        let result = parse_tags("hello[red]");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("unclosed"), "Got: {msg}");
     }
 
     #[test]
