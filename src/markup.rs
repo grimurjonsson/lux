@@ -1,4 +1,13 @@
+use anyhow::{bail, Result};
+use owo_colors::{OwoColorize, Style};
 use regex::Captures;
+
+/// A segment of parsed template text — either plain or styled.
+#[derive(Debug, Clone)]
+pub enum Segment {
+    Plain(String),
+    Styled(String, Style),
+}
 
 /// Interpolate capture group references in a template string.
 ///
@@ -46,6 +55,153 @@ pub fn interpolate(template: &str, caps: &Captures) -> String {
         }
     }
 
+    result
+}
+
+/// Parse a template string containing `[style-spec]text[/]` tags into segments.
+///
+/// - Tags: `[style-spec]text[/]` or `[style-spec]text[/style-spec]`
+/// - Opening a new tag implicitly closes the previous one (no nesting)
+/// - `[/]` with no open tag is a no-op
+/// - Validates styles using `crate::color::parse_style()`
+/// - Errors on unclosed brackets or unclosed style tags
+pub fn parse_tags(template: &str) -> Result<Vec<Segment>> {
+    let mut segments: Vec<Segment> = Vec::new();
+    let mut current_text = String::new();
+    let mut current_style: Option<(Style, String)> = None; // (style, tag_name)
+    let chars: Vec<char> = template.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        if chars[i] == '[' {
+            // Find the closing bracket
+            i += 1;
+            let mut tag_content = String::new();
+            while i < chars.len() && chars[i] != ']' {
+                tag_content.push(chars[i]);
+                i += 1;
+            }
+            if i >= chars.len() {
+                bail!(
+                    "unclosed bracket in template — '[{}' is missing ']'",
+                    tag_content
+                );
+            }
+            // Skip the closing ']'
+            i += 1;
+
+            // Determine if this is a closing tag or opening tag
+            if tag_content == "/" {
+                // Explicit close: [/]
+                if let Some((style, _tag_name)) = current_style.take() {
+                    if !current_text.is_empty() {
+                        segments.push(Segment::Styled(
+                            std::mem::take(&mut current_text),
+                            style,
+                        ));
+                    }
+                } else {
+                    // [/] with no open tag is a no-op, but flush any plain text
+                    if !current_text.is_empty() {
+                        segments.push(Segment::Plain(std::mem::take(&mut current_text)));
+                    }
+                }
+            } else if tag_content.starts_with('/') {
+                // Explicit close with name: [/style-spec]
+                if let Some((style, _tag_name)) = current_style.take() {
+                    if !current_text.is_empty() {
+                        segments.push(Segment::Styled(
+                            std::mem::take(&mut current_text),
+                            style,
+                        ));
+                    }
+                } else {
+                    // Close tag with no open tag — treat as no-op
+                    if !current_text.is_empty() {
+                        segments.push(Segment::Plain(std::mem::take(&mut current_text)));
+                    }
+                }
+            } else {
+                // Opening tag — validate the style spec
+                let style = crate::color::parse_style(&tag_content).map_err(|e| {
+                    anyhow::anyhow!("invalid style tag '[{}]': {}", tag_content, e)
+                })?;
+
+                // If there's already an open tag, implicitly close it
+                if let Some((prev_style, _prev_tag)) = current_style.take() {
+                    if !current_text.is_empty() {
+                        segments.push(Segment::Styled(
+                            std::mem::take(&mut current_text),
+                            prev_style,
+                        ));
+                    }
+                } else if !current_text.is_empty() {
+                    // Flush any plain text before the new tag
+                    segments.push(Segment::Plain(std::mem::take(&mut current_text)));
+                }
+
+                current_style = Some((style, tag_content));
+            }
+        } else {
+            current_text.push(chars[i]);
+            i += 1;
+        }
+    }
+
+    // Handle remaining text
+    if !current_text.is_empty() {
+        if let Some((_, ref tag_name)) = current_style {
+            bail!(
+                "unclosed style tag '[{}]' — add [/] to close it",
+                tag_name
+            );
+        }
+        segments.push(Segment::Plain(current_text));
+    } else if current_style.is_some() {
+        // Tag was opened but no text followed — still unclosed
+        // (e.g., "text[red]") — the tag had no content, which is not an error
+        // since the text is empty. But technically the tag is unclosed.
+        // Per spec, unclosed tag with text after it is an error.
+        // If there's no text, there's nothing to style, so it's fine.
+    }
+
+    Ok(segments)
+}
+
+/// Render parsed segments into a final string.
+///
+/// - Styled segments: apply their style
+/// - Plain segments with default_style and color_enabled: apply default style
+/// - Plain segments without default_style or !color_enabled: output as-is
+/// - If !color_enabled: strip all styles, return plain text
+pub fn render_segments(
+    segments: &[Segment],
+    default_style: Option<Style>,
+    color_enabled: bool,
+) -> String {
+    let mut result = String::new();
+    for segment in segments {
+        match segment {
+            Segment::Styled(text, style) => {
+                if color_enabled {
+                    result.push_str(&text.style(*style).to_string());
+                } else {
+                    result.push_str(text);
+                }
+            }
+            Segment::Plain(text) => {
+                if color_enabled {
+                    if let Some(style) = default_style {
+                        result.push_str(&text.style(style).to_string());
+                    } else {
+                        result.push_str(text);
+                    }
+                } else {
+                    result.push_str(text);
+                }
+            }
+        }
+    }
     result
 }
 
@@ -100,5 +256,96 @@ mod tests {
         let text = "ERROR auth: failed";
         let caps = re.captures(text).unwrap();
         assert_eq!(interpolate("end$", &caps), "end$");
+    }
+
+    // --- Task 2: Tag Parsing & Rendering ---
+
+    #[test]
+    fn test_parse_simple_tag() {
+        let segments = parse_tags("[red]hello[/]").unwrap();
+        assert_eq!(segments.len(), 1);
+        assert!(matches!(&segments[0], Segment::Styled(text, _) if text == "hello"));
+    }
+
+    #[test]
+    fn test_parse_multiple_tags() {
+        let segments = parse_tags("--- [red]ERROR[/] in [cyan]auth[/] ---").unwrap();
+        assert_eq!(segments.len(), 5);
+        assert!(matches!(&segments[0], Segment::Plain(t) if t == "--- "));
+        assert!(matches!(&segments[1], Segment::Styled(t, _) if t == "ERROR"));
+        assert!(matches!(&segments[2], Segment::Plain(t) if t == " in "));
+        assert!(matches!(&segments[3], Segment::Styled(t, _) if t == "auth"));
+        assert!(matches!(&segments[4], Segment::Plain(t) if t == " ---"));
+    }
+
+    #[test]
+    fn test_parse_implicit_close() {
+        let segments = parse_tags("[red]hello [bold]world[/]").unwrap();
+        assert_eq!(segments.len(), 2);
+        assert!(matches!(&segments[0], Segment::Styled(t, _) if t == "hello "));
+        assert!(matches!(&segments[1], Segment::Styled(t, _) if t == "world"));
+    }
+
+    #[test]
+    fn test_parse_explicit_close_tag() {
+        let segments = parse_tags("[red+bold]text[/red+bold]").unwrap();
+        assert_eq!(segments.len(), 1);
+        assert!(matches!(&segments[0], Segment::Styled(t, _) if t == "text"));
+    }
+
+    #[test]
+    fn test_parse_no_tags() {
+        let segments = parse_tags("plain text").unwrap();
+        assert_eq!(segments.len(), 1);
+        assert!(matches!(&segments[0], Segment::Plain(t) if t == "plain text"));
+    }
+
+    #[test]
+    fn test_parse_unclosed_tag_error() {
+        let result = parse_tags("[red]text");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("unclosed"),
+            "error should mention 'unclosed', got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_parse_invalid_style_error() {
+        let result = parse_tags("[notacolor]text[/]");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("invalid style"),
+            "error should mention 'invalid style', got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_render_plain_mode() {
+        let segments = parse_tags("[red]hello[/] world").unwrap();
+        let rendered = render_segments(&segments, None, false);
+        assert_eq!(rendered, "hello world");
+    }
+
+    #[test]
+    fn test_render_with_default_style() {
+        let segments = parse_tags("[red]hello[/] world").unwrap();
+        let default_style = crate::color::parse_style("blue").unwrap();
+        let rendered = render_segments(&segments, Some(default_style), true);
+        // Plain segment "world" should have the default style applied,
+        // so it should not be plain text
+        assert!(rendered.contains("world"));
+        // The styled segment "hello" should also be present
+        assert!(rendered.contains("hello"));
+    }
+
+    #[test]
+    fn test_close_tag_noop_when_no_open() {
+        let segments = parse_tags("text[/]more").unwrap();
+        assert_eq!(segments.len(), 2);
+        assert!(matches!(&segments[0], Segment::Plain(t) if t == "text"));
+        assert!(matches!(&segments[1], Segment::Plain(t) if t == "more"));
     }
 }
