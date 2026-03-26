@@ -281,9 +281,12 @@ pub fn build_rules_with_config(
         match profile {
             Some(p) => {
                 for rc in &p.rules {
-                    rules.push(rule_from_config(
-                        &rc.pattern, &rc.style, &rc.scope, offset,
-                    )?);
+                    let rule = if let Some(ref text) = rc.text {
+                        rule_from_config_with_text(&rc.pattern, &rc.style, &rc.scope, text, offset)?
+                    } else {
+                        rule_from_config(&rc.pattern, &rc.style, &rc.scope, offset)?
+                    };
+                    rules.push(rule);
                     offset += 1;
                 }
             }
@@ -316,7 +319,12 @@ pub fn build_rules_with_config(
     // Global config rules -- lower priority than profile rules
     if let Some(cfg) = config {
         for rc in &cfg.rules {
-            rules.push(rule_from_config(&rc.pattern, &rc.style, &rc.scope, offset)?);
+            let rule = if let Some(ref text) = rc.text {
+                rule_from_config_with_text(&rc.pattern, &rc.style, &rc.scope, text, offset)?
+            } else {
+                rule_from_config(&rc.pattern, &rc.style, &rc.scope, offset)?
+            };
+            rules.push(rule);
             offset += 1;
         }
     }
@@ -338,6 +346,28 @@ pub fn rule_from_config(pattern: &str, style: &str, scope: &str, priority: usize
     };
 
     build_rule(pattern, style, scope, priority)
+}
+
+/// Create a Rule from config fields including a template text for insert scopes.
+///
+/// Used when a config rule has a `text` field, indicating an insert rule.
+/// The `scope` must be one of: "insert-before", "insert-after", "prepend", "append".
+pub fn rule_from_config_with_text(
+    pattern: &str, style: &str, scope: &str, text: &str, priority: usize,
+) -> Result<Rule> {
+    let compiled = Regex::new(pattern)
+        .map_err(|e| anyhow::anyhow!("invalid regex pattern '{pattern}': {e}"))?;
+    let parsed_style = if style.is_empty() { Style::new() } else { color::parse_style(style)? };
+    let segments = markup::validate_template(text, compiled.captures_len())?;
+    let tmpl = InsertTemplate { template: text.to_string(), segments };
+    let scope = match scope {
+        "insert-before" => MatchScope::InsertBefore(tmpl),
+        "insert-after" => MatchScope::InsertAfter(tmpl),
+        "prepend" => MatchScope::Prepend(tmpl),
+        "append" => MatchScope::Append(tmpl),
+        _ => bail!("rule_from_config_with_text called with non-insert scope '{scope}'"),
+    };
+    Ok(Rule { pattern: compiled, style: parsed_style, scope, priority })
 }
 
 #[cfg(test)]
@@ -550,6 +580,7 @@ mod tests {
             pattern: pattern.to_string(),
             style: style.to_string(),
             scope: "line".to_string(),
+            text: None,
         }
     }
 
@@ -728,5 +759,21 @@ mod tests {
     fn test_parse_rule_backward_compat_three_parts() {
         let rule = parse_rule("ERROR:red:match", 0).unwrap();
         assert_eq!(rule.scope, MatchScope::Match);
+    }
+
+    // === rule_from_config_with_text tests ===
+
+    #[test]
+    fn test_rule_from_config_insert_before() {
+        let rule = rule_from_config_with_text(
+            "ERROR", "red", "insert-before", "--- alert ---", 0,
+        ).unwrap();
+        assert!(rule.pattern.is_match("ERROR"));
+        match &rule.scope {
+            MatchScope::InsertBefore(tmpl) => {
+                assert_eq!(tmpl.template, "--- alert ---");
+            }
+            other => panic!("expected InsertBefore, got: {other:?}"),
+        }
     }
 }
