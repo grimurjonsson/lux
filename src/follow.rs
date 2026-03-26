@@ -73,16 +73,18 @@ fn read_new_lines(
                 continue;
             }
         }
-        let colored = engine.apply(trimmed);
+        let result = engine.apply(trimmed);
         if let Some(ref mut tf) = trigger {
-            match tf.process_line(trimmed, colored) {
-                OutputDecision::Pass(s) => {
-                    if let Some(ref mut ann) = slow {
-                        if let Some(prev) = ann.annotate(&s) {
-                            writeln!(writer, "{prev}")?;
+            match tf.process_line(trimmed, result.flatten()) {
+                OutputDecision::Pass(out_lines) => {
+                    for l in out_lines {
+                        if let Some(ref mut ann) = slow {
+                            if let Some(prev) = ann.annotate(&l) {
+                                writeln!(writer, "{prev}")?;
+                            }
+                        } else {
+                            writeln!(writer, "{l}")?;
                         }
-                    } else {
-                        writeln!(writer, "{s}")?;
                     }
                 }
                 OutputDecision::Flush(lines) => {
@@ -99,12 +101,18 @@ fn read_new_lines(
                 OutputDecision::Suppress => {}
             }
         } else {
+            for l in &result.before {
+                writeln!(writer, "{l}")?;
+            }
             if let Some(ref mut ann) = slow {
-                if let Some(prev) = ann.annotate(&colored) {
+                if let Some(prev) = ann.annotate(&result.line) {
                     writeln!(writer, "{prev}")?;
                 }
             } else {
-                writeln!(writer, "{colored}")?;
+                writeln!(writer, "{}", result.line)?;
+            }
+            for l in &result.after {
+                writeln!(writer, "{l}")?;
             }
         }
         count += 1;

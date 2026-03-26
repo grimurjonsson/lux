@@ -736,13 +736,13 @@ mod tests {
 
     #[test]
     fn test_apply_result_append() {
-        let rules = vec![crate::rules::parse_rule("DEBUG::append: [done]", 0).unwrap()];
+        let rules = vec![crate::rules::parse_rule("DEBUG::append: (done)", 0).unwrap()];
         let mut engine = Engine::new(rules, true, None);
         let result = engine.apply("DEBUG: stuff");
         assert!(result.before.is_empty());
         assert!(result.after.is_empty());
         assert!(result.line.starts_with("DEBUG: stuff"), "line should start with original text");
-        assert!(result.line.ends_with(" [done]"), "line should end with appended text, got: {}", result.line);
+        assert!(result.line.ends_with(" (done)"), "line should end with appended text, got: {}", result.line);
     }
 
     #[test]

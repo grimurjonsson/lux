@@ -400,15 +400,17 @@ fn run() -> anyhow::Result<()> {
                 if filter.is_active() && !filter.should_show(&line) {
                     continue;
                 }
-                let colored = engine.apply(&line);
-                match trigger_filter.process_line(&line, colored) {
-                    OutputDecision::Pass(s) => {
-                        if let Some(ref mut ann) = slow_annotator {
-                            if let Some(prev) = ann.annotate(&s) {
-                                writeln!(writer, "{prev}")?;
+                let result = engine.apply(&line);
+                match trigger_filter.process_line(&line, result.flatten()) {
+                    OutputDecision::Pass(lines) => {
+                        for l in lines {
+                            if let Some(ref mut ann) = slow_annotator {
+                                if let Some(prev) = ann.annotate(&l) {
+                                    writeln!(writer, "{prev}")?;
+                                }
+                            } else {
+                                writeln!(writer, "{l}")?;
                             }
-                        } else {
-                            writeln!(writer, "{s}")?;
                         }
                     }
                     OutputDecision::Flush(lines) => {
@@ -434,13 +436,19 @@ fn run() -> anyhow::Result<()> {
                 if filter.is_active() && !filter.should_show(&line) {
                     continue;
                 }
-                let output = engine.apply(&line);
+                let result = engine.apply(&line);
+                for l in &result.before {
+                    writeln!(writer, "{l}")?;
+                }
                 if let Some(ref mut ann) = slow_annotator {
-                    if let Some(prev) = ann.annotate(&output) {
+                    if let Some(prev) = ann.annotate(&result.line) {
                         writeln!(writer, "{prev}")?;
                     }
                 } else {
-                    writeln!(writer, "{output}")?;
+                    writeln!(writer, "{}", result.line)?;
+                }
+                for l in &result.after {
+                    writeln!(writer, "{l}")?;
                 }
                 if stdout_is_terminal {
                     writer.flush()?;
@@ -495,9 +503,13 @@ fn print_lines_filtered(
             if filter.is_active() && !filter.should_show(line) {
                 continue;
             }
-            let colored = engine.apply(line);
-            match trigger.process_line(line, colored) {
-                OutputDecision::Pass(s) => writeln!(writer, "{s}")?,
+            let result = engine.apply(line);
+            match trigger.process_line(line, result.flatten()) {
+                OutputDecision::Pass(out_lines) => {
+                    for l in out_lines {
+                        writeln!(writer, "{l}")?;
+                    }
+                }
                 OutputDecision::Flush(flushed) => {
                     for l in flushed {
                         writeln!(writer, "{l}")?;
@@ -511,8 +523,10 @@ fn print_lines_filtered(
             if filter.is_active() && !filter.should_show(line) {
                 continue;
             }
-            let output = engine.apply(line);
-            writeln!(writer, "{output}")?;
+            let result = engine.apply(line);
+            for l in result.flatten() {
+                writeln!(writer, "{l}")?;
+            }
         }
     }
     writer.flush()?;

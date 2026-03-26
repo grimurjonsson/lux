@@ -93,9 +93,9 @@ fn colorize_lines(
             if filter.is_active() && !filter.should_show(line) {
                 continue;
             }
-            let colored = engine.apply(line);
-            match trigger.process_line(line, colored) {
-                OutputDecision::Pass(s) => result.push(s),
+            let apply_result = engine.apply(line);
+            match trigger.process_line(line, apply_result.flatten()) {
+                OutputDecision::Pass(v) => result.extend(v),
                 OutputDecision::Flush(lines) => result.extend(lines),
                 OutputDecision::Suppress => {}
             }
@@ -105,7 +105,7 @@ fn colorize_lines(
             if filter.is_active() && !filter.should_show(line) {
                 continue;
             }
-            result.push(engine.apply(line));
+            result.extend(engine.apply(line).flatten());
         }
     }
 

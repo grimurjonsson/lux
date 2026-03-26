@@ -770,8 +770,14 @@ pub fn show_profile_to(
 
             writeln!(out, "  {}", "Preview:".bold())?;
             for line in &example_lines {
-                let colored = engine.apply(line);
-                writeln!(out, "    {}", colored)?;
+                let result = engine.apply(line);
+                for l in &result.before {
+                    writeln!(out, "    {}", l)?;
+                }
+                writeln!(out, "    {}", result.line)?;
+                for l in &result.after {
+                    writeln!(out, "    {}", l)?;
+                }
             }
         }
     }
