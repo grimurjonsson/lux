@@ -1308,3 +1308,98 @@ fn slow_plain_mode_no_ansi() {
     assert!(stdout.contains("[took:"), "should have timing annotation: {stdout}");
     assert!(!has_ansi_codes(&stdout), "should not have ANSI codes in plain mode: {stdout}");
 }
+
+// ── Text insertion rule tests ──────────────────────────────────────────
+
+#[test]
+fn insert_before_rule() {
+    let output = lux()
+        .arg("--color").arg("never")
+        .arg("-r").arg("ERROR::insert-before:--- alert ---")
+        .write_stdin("INFO: ok\nERROR: fail\nINFO: ok\n")
+        .output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 4);
+    assert_eq!(lines[0], "INFO: ok");
+    assert_eq!(lines[1], "--- alert ---");
+    assert_eq!(lines[2], "ERROR: fail");
+    assert_eq!(lines[3], "INFO: ok");
+}
+
+#[test]
+fn insert_after_rule() {
+    let output = lux()
+        .arg("--color").arg("never")
+        .arg("-r").arg("ERROR::insert-after:^^^ check above ^^^")
+        .write_stdin("ERROR: fail\nINFO: ok\n")
+        .output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 3);
+    assert_eq!(lines[0], "ERROR: fail");
+    assert_eq!(lines[1], "^^^ check above ^^^");
+    assert_eq!(lines[2], "INFO: ok");
+}
+
+#[test]
+fn prepend_rule() {
+    let output = lux()
+        .arg("--color").arg("never")
+        .arg("-r").arg("WARN::prepend:!! ")
+        .write_stdin("WARN: disk full\n")
+        .output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout.trim(), "!! WARN: disk full");
+}
+
+#[test]
+fn append_rule() {
+    let output = lux()
+        .arg("--color").arg("never")
+        .arg("-r").arg("DEBUG::append: (debug)")
+        .write_stdin("DEBUG: trace\n")
+        .output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout.trim(), "DEBUG: trace (debug)");
+}
+
+#[test]
+fn insert_with_capture_interpolation() {
+    let output = lux()
+        .arg("--color").arg("never")
+        .arg("-r").arg(r"ERROR (\w+)::insert-before:--- error in $1 ---")
+        .write_stdin("ERROR auth: failed\n")
+        .output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines[0], "--- error in auth ---");
+    assert_eq!(lines[1], "ERROR auth: failed");
+}
+
+#[test]
+fn insert_stacks_with_style_rules() {
+    let output = lux()
+        .arg("--color").arg("always")
+        .arg("-r").arg("ERROR:red")
+        .arg("-r").arg("ERROR::insert-before:--- alert ---")
+        .write_stdin("ERROR: fail\n")
+        .output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0], "--- alert ---");
+    assert!(has_ansi_codes(lines[1]), "ERROR line should be styled");
+}
+
+#[test]
+fn insert_template_with_colons() {
+    let output = lux()
+        .arg("--color").arg("never")
+        .arg("-r").arg("ERROR::insert-before:--- 12:34:56 ---")
+        .write_stdin("ERROR: fail\n")
+        .output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines[0], "--- 12:34:56 ---");
+}

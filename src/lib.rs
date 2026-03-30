@@ -4,6 +4,7 @@ pub mod config;
 pub mod engine;
 pub mod filter;
 pub mod follow;
+pub mod markup;
 pub mod output;
 pub mod pager;
 pub mod rules;

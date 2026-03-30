@@ -17,6 +17,9 @@ pub struct RuleConfig {
     pub style: String,
     #[serde(default = "default_scope")]
     pub scope: String,
+    /// Template text for insert rules (insert-before, insert-after, prepend, append).
+    #[serde(default)]
+    pub text: Option<String>,
 }
 
 fn default_scope() -> String {
@@ -241,12 +244,12 @@ pub fn builtin_profiles() -> HashMap<String, ProfileConfig> {
         "logs".to_string(),
         ProfileConfig {
             rules: vec![
-                RuleConfig { pattern: r"(?i)fatal|critical".to_string(), style: "bold+red".to_string(), scope: "line".to_string() },
-                RuleConfig { pattern: r"(?i)error".to_string(), style: "red".to_string(), scope: "line".to_string() },
-                RuleConfig { pattern: r"(?i)warn".to_string(), style: "yellow".to_string(), scope: "line".to_string() },
-                RuleConfig { pattern: r"(?i)info".to_string(), style: "white".to_string(), scope: "line".to_string() },
-                RuleConfig { pattern: r"(?i)debug".to_string(), style: "dim".to_string(), scope: "line".to_string() },
-                RuleConfig { pattern: r"(?i)trace".to_string(), style: "240".to_string(), scope: "line".to_string() },
+                RuleConfig { pattern: r"(?i)fatal|critical".to_string(), style: "bold+red".to_string(), scope: "line".to_string(), text: None },
+                RuleConfig { pattern: r"(?i)error".to_string(), style: "red".to_string(), scope: "line".to_string(), text: None },
+                RuleConfig { pattern: r"(?i)warn".to_string(), style: "yellow".to_string(), scope: "line".to_string(), text: None },
+                RuleConfig { pattern: r"(?i)info".to_string(), style: "white".to_string(), scope: "line".to_string(), text: None },
+                RuleConfig { pattern: r"(?i)debug".to_string(), style: "dim".to_string(), scope: "line".to_string(), text: None },
+                RuleConfig { pattern: r"(?i)trace".to_string(), style: "240".to_string(), scope: "line".to_string(), text: None },
             ],
             trigger: vec![],
             before: None,
@@ -262,23 +265,23 @@ pub fn builtin_profiles() -> HashMap<String, ProfileConfig> {
         ProfileConfig {
             rules: vec![
                 // 1. Section headers: "Usage:", "Commands:", "Options:", etc.
-                RuleConfig { pattern: r"^[A-Z][a-zA-Z ]+:$".to_string(), style: "bold+cyan".to_string(), scope: "line".to_string() },
+                RuleConfig { pattern: r"^[A-Z][a-zA-Z ]+:$".to_string(), style: "bold+cyan".to_string(), scope: "line".to_string(), text: None },
                 // 2. Long flags: --color, --profile, --strip-ansi
-                RuleConfig { pattern: r"--[a-zA-Z][-a-zA-Z0-9]*".to_string(), style: "bold+green".to_string(), scope: "match".to_string() },
+                RuleConfig { pattern: r"--[a-zA-Z][-a-zA-Z0-9]*".to_string(), style: "bold+green".to_string(), scope: "match".to_string(), text: None },
                 // 3. Short flags: -r, -f, -h (word boundary prevents matching inside long flags)
-                RuleConfig { pattern: r"-[a-zA-Z]\b".to_string(), style: "bold+green".to_string(), scope: "match".to_string() },
+                RuleConfig { pattern: r"-[a-zA-Z]\b".to_string(), style: "bold+green".to_string(), scope: "match".to_string(), text: None },
                 // 4. Placeholder values: <RULES>, <COLOR>, [FILE], [OPTIONS]
-                RuleConfig { pattern: r"<[A-Z_]+>|\[[A-Z_]+\]".to_string(), style: "cyan".to_string(), scope: "match".to_string() },
+                RuleConfig { pattern: r"<[A-Z_]+>|\[[A-Z_]+\]".to_string(), style: "cyan".to_string(), scope: "match".to_string(), text: None },
                 // 5. Default values: [default: auto], [default: 20]
-                RuleConfig { pattern: r"\[default: [^\]]+\]".to_string(), style: "dim".to_string(), scope: "match".to_string() },
+                RuleConfig { pattern: r"\[default: [^\]]+\]".to_string(), style: "dim".to_string(), scope: "match".to_string(), text: None },
                 // 6. Possible values: [possible values: auto, always, never]
-                RuleConfig { pattern: r"\[possible values: [^\]]+\]".to_string(), style: "dim".to_string(), scope: "match".to_string() },
+                RuleConfig { pattern: r"\[possible values: [^\]]+\]".to_string(), style: "dim".to_string(), scope: "match".to_string(), text: None },
                 // 7. Subcommand names: indented words at start of line
-                RuleConfig { pattern: r"^  \w[-\w]*".to_string(), style: "yellow".to_string(), scope: "match".to_string() },
+                RuleConfig { pattern: r"^  \w[-\w]*".to_string(), style: "yellow".to_string(), scope: "match".to_string(), text: None },
                 // 8. Quoted strings: "10", "+5", "^==="
-                RuleConfig { pattern: r#""[^"]*""#.to_string(), style: "magenta".to_string(), scope: "match".to_string() },
+                RuleConfig { pattern: r#""[^"]*""#.to_string(), style: "magenta".to_string(), scope: "match".to_string(), text: None },
                 // 9. Tool name in Usage line
-                RuleConfig { pattern: r"Usage: (\w+)".to_string(), style: "bold+white".to_string(), scope: "cap1".to_string() },
+                RuleConfig { pattern: r"Usage: (\w+)".to_string(), style: "bold+white".to_string(), scope: "cap1".to_string(), text: None },
             ],
             trigger: vec![],
             before: None,
@@ -754,7 +757,12 @@ pub fn show_profile_to(
             // Build engine from profile rules
             let mut rules = Vec::new();
             for (i, rc) in profile.rules.iter().enumerate() {
-                if let Ok(rule) = rule_from_config(&rc.pattern, &rc.style, &rc.scope, i) {
+                let rule = if let Some(ref text) = rc.text {
+                    crate::rules::rule_from_config_with_text(&rc.pattern, &rc.style, &rc.scope, text, i).ok()
+                } else {
+                    rule_from_config(&rc.pattern, &rc.style, &rc.scope, i).ok()
+                };
+                if let Some(rule) = rule {
                     rules.push(rule);
                 }
             }
@@ -762,8 +770,14 @@ pub fn show_profile_to(
 
             writeln!(out, "  {}", "Preview:".bold())?;
             for line in &example_lines {
-                let colored = engine.apply(line);
-                writeln!(out, "    {}", colored)?;
+                let result = engine.apply(line);
+                for l in &result.before {
+                    writeln!(out, "    {}", l)?;
+                }
+                writeln!(out, "    {}", result.line)?;
+                for l in &result.after {
+                    writeln!(out, "    {}", l)?;
+                }
             }
         }
     }
@@ -1435,6 +1449,7 @@ lines = "+1"
                 pattern: "X".to_string(),
                 style: "red".to_string(),
                 scope: "line".to_string(),
+                text: None,
             }],
             trigger: vec![],
             before: None,
@@ -1543,6 +1558,7 @@ lines = "+1"
                             pattern: "CUSTOM".to_string(),
                             style: "red".to_string(),
                             scope: "line".to_string(),
+                            text: None,
                         }],
                         trigger: vec![],
                         before: None,
@@ -1699,11 +1715,13 @@ lines = "+1"
                                 pattern: "ERROR".to_string(),
                                 style: "red".to_string(),
                                 scope: "line".to_string(),
+                                text: None,
                             },
                             RuleConfig {
                                 pattern: "SUCCESS".to_string(),
                                 style: "green".to_string(),
                                 scope: "match".to_string(),
+                                text: None,
                             },
                         ],
                         trigger: vec!["ALERT".to_string()],
@@ -1782,6 +1800,7 @@ lines = "+1"
                             pattern: "CUSTOM".to_string(),
                             style: "blue".to_string(),
                             scope: "line".to_string(),
+                            text: None,
                         }],
                         trigger: vec![],
                         before: None,
@@ -1925,6 +1944,7 @@ lines = "+1"
                             pattern: "FOUND".to_string(),
                             style: "green".to_string(),
                             scope: "line".to_string(),
+                            text: None,
                         }],
                         trigger: vec![],
                         before: None,
@@ -1964,6 +1984,7 @@ lines = "+1"
                             pattern: "LOCAL".to_string(),
                             style: "green".to_string(),
                             scope: "line".to_string(),
+                            text: None,
                         }],
                         trigger: vec![],
                         before: None,
