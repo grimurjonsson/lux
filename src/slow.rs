@@ -92,7 +92,10 @@ pub fn format_duration(d: Duration) -> String {
 /// to emit the last buffered line without annotation.
 pub struct SlowLineAnnotator {
     threshold: Duration,
-    style: Style,
+    /// Pre-computed ANSI prefix for the annotation (e.g. "\x1b[0m\x1b[33;1m"), empty when color is off.
+    ansi_prefix: String,
+    /// Pre-computed ANSI suffix for the annotation (e.g. "\x1b[0m"), empty when color is off.
+    ansi_suffix: String,
     last_line_time: Instant,
     pending_line: Option<String>,
 }
@@ -105,9 +108,24 @@ impl SlowLineAnnotator {
         } else {
             Style::new()
         };
+        // Pre-render the ANSI escape codes once so they are baked into simple
+        // strings and cannot be affected by owo_colors runtime behaviour.
+        let (ansi_prefix, ansi_suffix) = if color_enabled && !style.is_plain() {
+            let probe = "X".style(style).to_string();
+            if let Some(x_pos) = probe.find('X') {
+                let prefix = format!("\x1b[0m{}", &probe[..x_pos]);
+                let suffix = probe[x_pos + 1..].to_string();
+                (prefix, suffix)
+            } else {
+                (String::new(), String::new())
+            }
+        } else {
+            (String::new(), String::new())
+        };
         Self {
             threshold,
-            style,
+            ansi_prefix,
+            ansi_suffix,
             last_line_time: Instant::now(),
             pending_line: None,
         }
@@ -126,9 +144,10 @@ impl SlowLineAnnotator {
         let result = self.pending_line.take().map(|prev| {
             if elapsed > self.threshold {
                 let formatted = format_duration(elapsed);
-                let annotation = format!("[took: {formatted}]");
-                let styled = annotation.style(self.style).to_string();
-                format!("{prev} {styled}")
+                format!(
+                    "{prev} {}[took: {formatted}]{}",
+                    self.ansi_prefix, self.ansi_suffix
+                )
             } else {
                 prev
             }
