@@ -5,6 +5,22 @@ All notable changes to lux will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.13] - 2026-04-01
+Added text insertion rules, a next-scope for coloring lines after a match, local profile support with a new `lux profile show` command, and fixed slow-style output.
+
+### Added
+- add text insertion rules (insert-before/after, prepend, append) (#13)
+- add next scope to color N lines after a trigger match
+- lux profile show profile_name added
+- improve the README.md
+
+### Fixed
+- fixing the slow-style output a bit
+
+### Other
+- docs: add local profiles section to README
+- local profiles
+
 ## [0.1.12] - 2026-03-25
 Added duration parsing for --slow (e.g. `--slow 200ms`), a `next` scope to color lines after a trigger match, local profile discovery, and a `lux profile show` command.
 

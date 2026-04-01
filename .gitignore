@@ -3,3 +3,5 @@
 .superpowers/
 .DS_Store
 .worktrees/
+.planning
+docs/superpowers
