@@ -5,6 +5,18 @@ All notable changes to lux will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.14] - 2026-04-22
+Fixed ANSI preservation in pipe mode so external colors survive when lux rules don't claim them. Added markdown auto-detection on stdin and extended the `help` profile so `just --list`-style output gets styled out of the box.
+
+### Added
+- auto-detect Markdown on stdin and apply syntect highlighting (no file needed)
+- detect `just --list` / `cargo --list` style output and apply the `help` profile
+- help profile now styles 4-space-indented recipe names and dims trailing `# comment` columns
+
+### Fixed
+- piped input keeps its original ANSI codes when no rule matches
+- `match`/`capture` rules restyle only the matched region and restore surrounding ANSI afterwards (no more collateral colour stripping from unrelated `cap` rules)
+
 ## [0.1.13] - 2026-04-01
 Added text insertion rules, a next-scope for coloring lines after a match, local profile support with a new `lux profile show` command, and fixed slow-style output.
 

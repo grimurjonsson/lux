@@ -118,6 +118,18 @@ impl SyntaxHighlighter {
         None
     }
 
+    /// Create a highlighter for a syntect syntax identified by name or extension.
+    ///
+    /// Used when lux has no file path but still wants to apply a syntax — e.g.
+    /// content-sniffing detects markdown on stdin.
+    pub fn for_syntax_name(name: &str, theme_name: Option<&str>) -> Option<Self> {
+        let ss = &*SYNTAX_SET;
+        let syntax = ss
+            .find_syntax_by_name(name)
+            .or_else(|| ss.find_syntax_by_extension(name))?;
+        Self::with_syntax(syntax, theme_name)
+    }
+
     fn with_syntax(
         syntax: &'static SyntaxReference,
         theme_name: Option<&str>,

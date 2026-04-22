@@ -199,6 +199,19 @@ fn run() -> anyhow::Result<()> {
         }
     });
 
+    // If the resolved profile doesn't exist and --ignore-missing-profiles is set,
+    // silently clear it instead of erroring later.
+    let active_profile_name = if let Some(ref name) = active_profile_name {
+        if !merged_profiles.contains_key(name.as_str()) && cli.ignore_missing_profiles {
+            eprintln!("warning: profile '{name}' not found, continuing without it");
+            None
+        } else {
+            active_profile_name
+        }
+    } else {
+        active_profile_name
+    };
+
     // Look up the active profile config
     let profile = active_profile_name
         .as_deref()
@@ -211,20 +224,29 @@ fn run() -> anyhow::Result<()> {
         Some(&merged_profiles),
     )?;
 
-    // Create syntect highlighter for the file
-    // Theme priority: --theme CLI flag > config.toml theme > default (Catppuccin Mocha)
+    // Create syntect highlighter:
+    // - File mode: resolve by path (extension, filename, syntax_map).
+    // - Stdin mode: sniff content (currently detects Markdown).
+    // Theme priority: --theme CLI flag > config.toml theme > default.
     let syntax_highlighter = if cli.no_profile {
         None
     } else {
-        cli.file.as_ref().and_then(|file_path| {
+        let theme = cli
+            .theme
+            .as_deref()
+            .or_else(|| config.as_ref().and_then(|(c, _)| c.theme.as_deref()));
+        if let Some(ref file_path) = cli.file {
             let path = std::path::Path::new(file_path);
-            let theme = cli.theme.as_deref()
-                .or_else(|| config.as_ref().and_then(|(c, _)| c.theme.as_deref()));
-            let syntax_map = config.as_ref()
+            let syntax_map = config
+                .as_ref()
                 .map(|(c, _)| &c.syntax_map)
                 .filter(|m| !m.is_empty());
             SyntaxHighlighter::for_file(path, theme, syntax_map)
-        })
+        } else if let Some(syntax_name) = config::detect_syntax_from_content(&stdin_buffer) {
+            SyntaxHighlighter::for_syntax_name(syntax_name, theme)
+        } else {
+            None
+        }
     };
 
     let mut engine = Engine::new(rules, color_mode.color_enabled(), syntax_highlighter);

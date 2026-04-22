@@ -24,6 +24,10 @@ pub struct Cli {
     #[arg(long, alias = "plain", conflicts_with = "profile")]
     pub no_profile: bool,
 
+    /// Continue without error if a profile is not found (useful for shared configs)
+    #[arg(long)]
+    pub ignore_missing_profiles: bool,
+
     /// Path to a custom config file (overrides XDG discovery)
     #[arg(long)]
     pub config: Option<String>,
@@ -520,6 +524,19 @@ mod tests {
     fn test_cat_conflicts_with_follow_descriptor() {
         let result = Cli::try_parse_from(["lux", "--cat", "-f", "app.log"]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_ignore_missing_profiles_flag() {
+        let cli = Cli::try_parse_from(["lux", "--profile", "nonexistent", "--ignore-missing-profiles"]).unwrap();
+        assert!(cli.ignore_missing_profiles);
+        assert_eq!(cli.profile.as_deref(), Some("nonexistent"));
+    }
+
+    #[test]
+    fn test_ignore_missing_profiles_default() {
+        let cli = Cli::try_parse_from(["lux"]).unwrap();
+        assert!(!cli.ignore_missing_profiles);
     }
 
     #[test]
