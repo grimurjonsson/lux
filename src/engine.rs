@@ -4,7 +4,6 @@ use owo_colors::{OwoColorize, Style};
 
 use crate::markup;
 use crate::rules::{InsertTemplate, MatchScope, Rule};
-use crate::trigger::strip_ansi;
 
 /// A styled region of text within a line.
 struct Span {
@@ -119,19 +118,12 @@ impl Engine {
             return empty;
         }
 
-        // When pending styles are active (carry-forward from Next rules) or
-        // cap/next rules exist, strip ANSI from the line so patterns match
-        // clean text and lux owns the styling of affected lines.
-        let needs_strip = has_pending || self.rules.iter().any(|r| {
-            matches!(&r.scope, MatchScope::Next(_) | MatchScope::Capture(_))
-        });
-        let clean;
-        let work_line = if needs_strip {
-            clean = strip_ansi(line);
-            &clean
-        } else {
-            line
-        };
+        // Always build a clean (ANSI-stripped) view for pattern matching, plus a
+        // byte-level map back to the raw line. Lux matches rules against the clean
+        // text but emits from the raw line, preserving any existing ANSI outside
+        // regions that lux actually styles.
+        let (clean, clean_to_raw) = strip_ansi_with_map(line);
+        let work_line = clean.as_str();
 
         // Collect spans from all matching rules; also collect insert actions.
         let mut spans = Vec::new();
@@ -194,15 +186,15 @@ impl Engine {
             }
         }
 
-        // Build the styled main line
+        // Build the styled main line.
+        // - color disabled, or no spans: pass the raw line through unchanged.
+        // - otherwise: overlay lux styles onto raw, preserving surrounding ANSI.
         let styled_line = if !self.color_enabled || spans.is_empty() {
-            work_line.to_string()
+            line.to_string()
         } else {
-            // Build per-byte style map: lowest priority number wins
             let len = work_line.len();
             let mut style_map: Vec<Option<(usize, Style)>> = vec![None; len];
 
-            // Sort by priority ascending (lowest number = highest priority)
             spans.sort_by_key(|s| s.priority);
 
             for span in &spans {
@@ -213,8 +205,7 @@ impl Engine {
                 }
             }
 
-            // Coalesce consecutive positions with the same style into segments
-            self.render(work_line, &style_map)
+            render_preserving_ansi(line, work_line, &clean_to_raw, &style_map)
         };
 
         // Apply prepend/append to the main line
@@ -296,42 +287,162 @@ impl Engine {
         }
     }
 
-    /// Render a line using the per-byte style map.
-    /// Coalesces consecutive bytes with the same style into segments.
-    fn render(&self, line: &str, style_map: &[Option<(usize, Style)>]) -> String {
-        let bytes = line.as_bytes();
-        let len = bytes.len();
-        if len == 0 {
-            return String::new();
-        }
+}
 
-        let mut result = String::with_capacity(len + 64);
-        let mut pos = 0;
-
-        while pos < len {
-            let current_style = style_map[pos];
-
-            // Find the end of this segment (same style)
-            let seg_start = pos;
-            pos += 1;
-            while pos < len && style_map[pos] == current_style {
-                pos += 1;
-            }
-
-            let segment = &line[seg_start..pos];
-
-            match current_style {
-                Some((_, style)) => {
-                    result.push_str(&segment.style(style).to_string());
-                }
-                None => {
-                    result.push_str(segment);
+/// Strip ANSI SGR escape sequences from `raw` while recording, for every clean
+/// byte `k`, the corresponding byte index in the original raw string.
+///
+/// Returns `(clean, clean_to_raw)` where:
+/// - `clean` is the raw text with `\x1b[...m` sequences removed.
+/// - `clean_to_raw[k]` is the raw byte offset of clean byte `k`, for `k` in
+///   `0..clean.len()`. `clean_to_raw[clean.len()]` holds the raw length as a
+///   sentinel so callers can compute tail ranges.
+///
+/// Raw bytes carrying UTF-8 continuation bytes share the same single-byte
+/// correspondence as their leading byte (each raw non-ANSI byte maps 1:1 to a
+/// clean byte).
+fn strip_ansi_with_map(raw: &str) -> (String, Vec<usize>) {
+    let bytes = raw.as_bytes();
+    let mut clean = String::with_capacity(bytes.len());
+    let mut map: Vec<usize> = Vec::with_capacity(bytes.len() + 1);
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] == 0x1b {
+            // Match the existing strip_ansi semantics: skip through the next 'm'.
+            i += 1;
+            while i < bytes.len() {
+                let b = bytes[i];
+                i += 1;
+                if b == b'm' {
+                    break;
                 }
             }
+        } else {
+            map.push(i);
+            // Copy this UTF-8 scalar whole. ANSI escapes never split a scalar
+            // because they use only ASCII bytes, so the raw slice here is
+            // guaranteed valid UTF-8.
+            let char_len = utf8_char_len(bytes[i]);
+            let end = (i + char_len).min(bytes.len());
+            for extra in 1..(end - i) {
+                map.push(i + extra);
+            }
+            clean.push_str(&raw[i..end]);
+            i = end;
         }
-
-        result
     }
+    map.push(bytes.len());
+    (clean, map)
+}
+
+fn utf8_char_len(b: u8) -> usize {
+    if b < 0x80 { 1 }
+    else if b < 0xC0 { 1 }
+    else if b < 0xE0 { 2 }
+    else if b < 0xF0 { 3 }
+    else { 4 }
+}
+
+/// Scan `text` for ANSI SGR escape sequences and update `active` to reflect the
+/// terminal state after processing them. A `\x1b[0m` or `\x1b[m` reset clears
+/// `active`; any other sequence is appended.
+fn update_active_ansi(active: &mut String, text: &str) {
+    let bytes = text.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] == 0x1b {
+            let start = i;
+            i += 1;
+            while i < bytes.len() {
+                let b = bytes[i];
+                i += 1;
+                if b == b'm' {
+                    break;
+                }
+            }
+            let seq = &text[start..i];
+            if seq == "\x1b[0m" || seq == "\x1b[m" {
+                active.clear();
+            } else {
+                active.push_str(seq);
+            }
+        } else {
+            i += 1;
+        }
+    }
+}
+
+/// Render the line by overlaying lux styles onto the raw input. Regions the
+/// rules did not claim keep their original ANSI verbatim; regions lux styles
+/// are emitted as `reset + lux-style + clean text + reset`, with any ANSI
+/// state that was active at the moment of the match restored for subsequent
+/// unstyled regions.
+fn render_preserving_ansi(
+    raw: &str,
+    clean: &str,
+    clean_to_raw: &[usize],
+    style_map: &[Option<(usize, Style)>],
+) -> String {
+    let mut out = String::with_capacity(raw.len() + 64);
+    let mut active_ansi = String::new();
+    let mut last_raw_end = 0usize;
+    let clean_len = clean.len();
+    let mut clean_pos = 0usize;
+
+    while clean_pos < clean_len {
+        let current_style = style_map[clean_pos];
+        let seg_start = clean_pos;
+        clean_pos += 1;
+        while clean_pos < clean_len && style_map[clean_pos] == current_style {
+            clean_pos += 1;
+        }
+        let seg_end = clean_pos;
+
+        let seg_raw_start = clean_to_raw[seg_start];
+        let seg_raw_end = clean_to_raw[seg_end - 1] + 1;
+
+        // ANSI in the gap between the previous segment and this one: update
+        // the running terminal state without emitting the codes directly —
+        // they'd either double up with something we restore later or stomp on
+        // a styled region that follows.
+        let gap = &raw[last_raw_end..seg_raw_start];
+        update_active_ansi(&mut active_ansi, gap);
+
+        match current_style {
+            None => {
+                // Unstyled: restore whatever style was active before this
+                // segment, then pass raw bytes through (including any ANSI
+                // embedded between clean bytes within this run).
+                if !active_ansi.is_empty() {
+                    out.push_str(&active_ansi);
+                }
+                let content = &raw[seg_raw_start..seg_raw_end];
+                out.push_str(content);
+                update_active_ansi(&mut active_ansi, content);
+            }
+            Some((_, style)) => {
+                // Styled: lux owns this region. Scan the raw span for any
+                // embedded ANSI so state is correct for later segments, but
+                // don't emit those codes — our style would override them.
+                let content_raw = &raw[seg_raw_start..seg_raw_end];
+                update_active_ansi(&mut active_ansi, content_raw);
+                // Reset only when there is prior styling to clear; avoids
+                // emitting noise on plain-text input.
+                if !active_ansi.is_empty() {
+                    out.push_str("\x1b[0m");
+                }
+                let clean_segment = &clean[seg_start..seg_end];
+                out.push_str(&clean_segment.style(style).to_string());
+            }
+        }
+
+        last_raw_end = seg_raw_end;
+    }
+
+    // Trailing raw bytes (typically a closing \x1b[0m). Emit verbatim.
+    out.push_str(&raw[last_raw_end..]);
+
+    out
 }
 
 #[cfg(test)]
@@ -697,6 +808,130 @@ mod tests {
         let result = engine.apply("\x1b[33mERROR: something\x1b[0m");
         // Line scope should style the whole line but the input text includes ANSI
         assert_ne!(result.line, "\x1b[33mERROR: something\x1b[0m");
+    }
+
+    // === ANSI preservation: non-matching lines pass through raw ===
+
+    #[test]
+    fn test_non_matching_line_preserves_ansi_even_with_capture_rules() {
+        // Regression: config rules using Capture scope used to strip ANSI
+        // from every line globally. A line that doesn't match any rule should
+        // pass through with its original ANSI intact.
+        let rules = vec![
+            Rule::test_with_scope("(?i)error", "white", MatchScope::Match, 0),
+            Rule::test_with_scope(r"^--- (FAIL)", "red", MatchScope::Capture(1), 0),
+            Rule::test_with_scope(r"^--- (PASS)", "green", MatchScope::Capture(1), 0),
+        ];
+        let mut engine = Engine::new(rules, true, None);
+
+        let input = "\x1b[32mbuild\x1b[0m    \x1b[90m# Build the mod\x1b[0m";
+        let result = engine.apply(input);
+
+        assert_eq!(result.line, input, "non-matching line must preserve raw ANSI");
+    }
+
+    #[test]
+    fn test_capture_preserves_surrounding_ansi() {
+        // A Capture rule should restyle only the captured text and leave
+        // surrounding ANSI intact.
+        let rules = vec![Rule::test_with_scope(
+            r"^--- (PASS)",
+            "green",
+            MatchScope::Capture(1),
+            0,
+        )];
+        let mut engine = Engine::new(rules, true, None);
+
+        let result = engine.apply("\x1b[33m--- PASS: TestFoo\x1b[0m");
+        // Original yellow wrapper must survive for the non-captured parts.
+        assert!(
+            result.line.contains("\x1b[33m"),
+            "surrounding ANSI should be preserved. Got: {:?}",
+            result.line
+        );
+        // Captured text must have been restyled (not equal to plain).
+        assert_ne!(result.line, "\x1b[33m--- PASS: TestFoo\x1b[0m");
+        // Restored yellow should appear after our reset so ': TestFoo' stays yellow.
+        let reset_pos = result.line.find("\x1b[0m").expect("reset emitted");
+        assert!(
+            result.line[reset_pos..].contains("\x1b[33m"),
+            "yellow should be restored after the styled capture. Got: {:?}",
+            result.line
+        );
+    }
+
+    #[test]
+    fn test_match_scope_preserves_surrounding_ansi() {
+        let rules = vec![Rule::test_with_scope("ERROR", "red", MatchScope::Match, 0)];
+        let mut engine = Engine::new(rules, true, None);
+
+        let result = engine.apply("\x1b[33mfoo ERROR bar\x1b[0m");
+        // Original yellow wrapper preserved for "foo " and " bar".
+        assert!(
+            result.line.contains("\x1b[33m"),
+            "surrounding ANSI should be preserved. Got: {:?}",
+            result.line
+        );
+        // And "foo " / " bar" appear as clean text somewhere in the output.
+        assert!(result.line.contains("foo "), "got: {:?}", result.line);
+        assert!(result.line.contains(" bar"), "got: {:?}", result.line);
+    }
+
+    #[test]
+    fn test_no_rules_match_passes_raw_ansi_through() {
+        // Even with Capture/Next rules present, a line that matches none of them
+        // should round-trip raw (no clean-coordinate rendering).
+        let rules = vec![Rule::test_with_scope(
+            r"^--- (PASS)",
+            "green",
+            MatchScope::Capture(1),
+            0,
+        )];
+        let mut engine = Engine::new(rules, true, None);
+
+        let input = "\x1b[32mjust some green text\x1b[0m";
+        let result = engine.apply(input);
+        assert_eq!(result.line, input);
+    }
+
+    // === Internal helpers ===
+
+    #[test]
+    fn test_strip_ansi_with_map_basic() {
+        let raw = "\x1b[32mhi\x1b[0m";
+        let (clean, map) = strip_ansi_with_map(raw);
+        assert_eq!(clean, "hi");
+        // 'h' at raw[5], 'i' at raw[6], sentinel = raw.len()
+        assert_eq!(map, vec![5, 6, raw.len()]);
+    }
+
+    #[test]
+    fn test_strip_ansi_with_map_no_ansi() {
+        let raw = "plain";
+        let (clean, map) = strip_ansi_with_map(raw);
+        assert_eq!(clean, "plain");
+        assert_eq!(map, vec![0, 1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn test_strip_ansi_with_map_preserves_utf8() {
+        let raw = "\x1b[31mhé\x1b[0m"; // 'é' is two bytes in UTF-8
+        let (clean, _map) = strip_ansi_with_map(raw);
+        assert_eq!(clean, "hé");
+    }
+
+    #[test]
+    fn test_update_active_ansi_reset_clears() {
+        let mut active = String::from("\x1b[31m");
+        update_active_ansi(&mut active, "\x1b[0m");
+        assert_eq!(active, "");
+    }
+
+    #[test]
+    fn test_update_active_ansi_appends_non_reset() {
+        let mut active = String::new();
+        update_active_ansi(&mut active, "\x1b[31mhi\x1b[1m");
+        assert_eq!(active, "\x1b[31m\x1b[1m");
     }
 
     // === Insert scope tests (ApplyResult) ===

@@ -395,6 +395,9 @@ Options:
       --no-profile
           Disable automatic profile and syntax highlighting (only explicit -r rules apply)
 
+      --ignore-missing-profiles
+          Continue without error if a profile is not found (useful for shared configs)
+
       --config <CONFIG>
           Path to a custom config file (overrides XDG discovery)
 

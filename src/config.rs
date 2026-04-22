@@ -276,11 +276,16 @@ pub fn builtin_profiles() -> HashMap<String, ProfileConfig> {
                 RuleConfig { pattern: r"\[default: [^\]]+\]".to_string(), style: "dim".to_string(), scope: "match".to_string(), text: None },
                 // 6. Possible values: [possible values: auto, always, never]
                 RuleConfig { pattern: r"\[possible values: [^\]]+\]".to_string(), style: "dim".to_string(), scope: "match".to_string(), text: None },
-                // 7. Subcommand names: indented words at start of line
-                RuleConfig { pattern: r"^  \w[-\w]*".to_string(), style: "yellow".to_string(), scope: "match".to_string(), text: None },
-                // 8. Quoted strings: "10", "+5", "^==="
+                // 7. Subcommand / recipe names: identifier at 2–8 space indent,
+                //    followed by whitespace or EOL. Covers both `cargo` (2-space)
+                //    and `just` (4-space) list layouts. Capture only the name so
+                //    separator spaces stay unstyled.
+                RuleConfig { pattern: r"^ {2,8}(\w[-\w]*)(?:\s|$)".to_string(), style: "yellow".to_string(), scope: "cap1".to_string(), text: None },
+                // 8. Trailing `# comment` after a column separator (just-style).
+                RuleConfig { pattern: r"\s#\s.*$".to_string(), style: "dim".to_string(), scope: "match".to_string(), text: None },
+                // 9. Quoted strings: "10", "+5", "^==="
                 RuleConfig { pattern: r#""[^"]*""#.to_string(), style: "magenta".to_string(), scope: "match".to_string(), text: None },
-                // 9. Tool name in Usage line
+                // 10. Tool name in Usage line
                 RuleConfig { pattern: r"Usage: (\w+)".to_string(), style: "bold+white".to_string(), scope: "cap1".to_string(), text: None },
             ],
             trigger: vec![],
@@ -297,8 +302,10 @@ pub fn builtin_profiles() -> HashMap<String, ProfileConfig> {
 
 /// Detect a profile by sniffing the first lines of stdin content.
 ///
-/// Currently detects help text (clap/argparse style) by looking for "Usage:" and
-/// flag patterns like "--option" or section headers like "Options:".
+/// Triggers the `help` profile on either of:
+/// - clap/argparse-style help: "Usage:" plus flags or section headers.
+/// - section-header + indented list (e.g. `just --list`): any line like
+///   `Available recipes:` / `Options:` followed by ≥2 indented non-empty lines.
 pub fn detect_profile_from_content(lines: &[String]) -> Option<String> {
     let has_usage = lines.iter().any(|l| l.contains("Usage:"));
     let has_flags = lines.iter().any(|l| l.contains("--"));
@@ -308,6 +315,10 @@ pub fn detect_profile_from_content(lines: &[String]) -> Option<String> {
     });
 
     if has_usage && (has_flags || has_section) {
+        return Some("help".to_string());
+    }
+
+    if looks_like_section_listing(lines) {
         return Some("help".to_string());
     }
 
@@ -324,6 +335,90 @@ pub fn detect_profile_from_content(lines: &[String]) -> Option<String> {
     }
 
     None
+}
+
+/// True if the buffer contains a "section header + indented items" layout,
+/// the shape produced by tools like `just --list` or `cargo --list`.
+///
+/// The header must look like `^[A-Z][a-zA-Z ]+:$` and at least 2 subsequent
+/// lines must be non-empty and start with 2+ whitespace characters.
+fn looks_like_section_listing(lines: &[String]) -> bool {
+    let Some(header_idx) = lines.iter().position(|l| is_section_header(l)) else {
+        return false;
+    };
+    let indented = lines
+        .iter()
+        .skip(header_idx + 1)
+        .filter(|l| l.starts_with("  ") && !l.trim().is_empty())
+        .count();
+    indented >= 2
+}
+
+fn is_section_header(line: &str) -> bool {
+    let trimmed = line.trim_end();
+    let Some(body) = trimmed.strip_suffix(':') else {
+        return false;
+    };
+    if body.is_empty() {
+        return false;
+    }
+    let mut chars = body.chars();
+    let first = chars.next().unwrap();
+    first.is_ascii_uppercase() && chars.all(|c| c.is_ascii_alphabetic() || c == ' ')
+}
+
+/// Detect a syntect syntax from the first lines of stdin content.
+///
+/// Returns a syntax name suitable for `SyntaxHighlighter::for_syntax_name`.
+/// Currently only detects Markdown; other syntaxes may be added later.
+pub fn detect_syntax_from_content(lines: &[String]) -> Option<&'static str> {
+    if is_markdown_content(lines) {
+        return Some("Markdown");
+    }
+    None
+}
+
+/// Heuristic check for whether a buffer of lines looks like Markdown.
+///
+/// Any fenced code block (```` ``` ```` / `~~~`) is a decisive signal. Otherwise
+/// at least two of {ATX headers, inline links} are required. Bullet/numbered
+/// lists alone aren't enough because plain CLI output uses the same shapes.
+fn is_markdown_content(lines: &[String]) -> bool {
+    let mut atx_headers = 0usize;
+    let mut links = 0usize;
+
+    for line in lines {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            return true;
+        }
+
+        // ATX header: 1–6 '#' then a space then a non-whitespace char.
+        let bytes = line.as_bytes();
+        let mut hash_count = 0usize;
+        while hash_count < bytes.len() && hash_count < 6 && bytes[hash_count] == b'#' {
+            hash_count += 1;
+        }
+        if hash_count > 0
+            && hash_count < bytes.len()
+            && bytes[hash_count] == b' '
+            && bytes
+                .get(hash_count + 1)
+                .is_some_and(|b| !b.is_ascii_whitespace())
+        {
+            atx_headers += 1;
+        }
+
+        // Inline link: `[text](url)`. Cheap check for the `](` bridge with a
+        // preceding `[` on the same line.
+        if let Some(idx) = line.find("](") {
+            if line[..idx].contains('[') {
+                links += 1;
+            }
+        }
+    }
+
+    atx_headers + links >= 2
 }
 
 /// Find a profile name that matches the given file extension.
@@ -1536,6 +1631,116 @@ lines = "+1"
         let help = &profiles["help"];
         assert!(!help.rules.is_empty(), "Help profile should have rules");
         assert!(help.extensions.is_empty(), "Help profile should not have file extensions");
+    }
+
+    // === detect_syntax_from_content ===
+
+    fn lines(text: &str) -> Vec<String> {
+        text.lines().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn detect_markdown_fenced_code_block() {
+        let input = lines("Here is some code:\n```rust\nfn main() {}\n```\n");
+        assert_eq!(detect_syntax_from_content(&input), Some("Markdown"));
+    }
+
+    #[test]
+    fn detect_markdown_tilde_fenced_code_block() {
+        let input = lines("~~~\nfoo\n~~~");
+        assert_eq!(detect_syntax_from_content(&input), Some("Markdown"));
+    }
+
+    #[test]
+    fn detect_markdown_two_headers() {
+        let input = lines("# Title\n\n## Subtitle\n\nSome text.");
+        assert_eq!(detect_syntax_from_content(&input), Some("Markdown"));
+    }
+
+    #[test]
+    fn detect_markdown_header_plus_link() {
+        let input = lines("# Readme\n\nSee the [docs](https://example.com) for more.");
+        assert_eq!(detect_syntax_from_content(&input), Some("Markdown"));
+    }
+
+    #[test]
+    fn detect_markdown_single_header_not_enough() {
+        // A single "# foo" line is common in shell/python/yaml comments.
+        // One signal alone should not trigger markdown.
+        let input = lines("# comment in a shell script\nset -e\nrun --flag");
+        assert_eq!(detect_syntax_from_content(&input), None);
+    }
+
+    #[test]
+    fn detect_markdown_shebang_is_not_header() {
+        let input = lines("#!/bin/sh\nset -e");
+        assert_eq!(detect_syntax_from_content(&input), None);
+    }
+
+    #[test]
+    fn detect_markdown_hash_without_space_is_not_header() {
+        // "#hashtag" or "#abc" should not count as an ATX header.
+        let input = lines("#hashtag\n#foo\n#bar");
+        assert_eq!(detect_syntax_from_content(&input), None);
+    }
+
+    #[test]
+    fn detect_markdown_plain_cli_output_not_detected() {
+        // Just-like output shouldn't register as markdown.
+        let input = lines(
+            "Available recipes:\n    build    # Build the mod\n    clean    # Clean build artifacts\n",
+        );
+        assert_eq!(detect_syntax_from_content(&input), None);
+    }
+
+    #[test]
+    fn detect_markdown_empty_input() {
+        let input: Vec<String> = vec![];
+        assert_eq!(detect_syntax_from_content(&input), None);
+    }
+
+    // === detect_profile_from_content: section-listing detection ===
+
+    #[test]
+    fn detect_help_on_just_list_output() {
+        let input = lines(
+            "Available recipes:\n    build    # Build the mod\n    clean    # Clean build artifacts\n    default\n",
+        );
+        assert_eq!(detect_profile_from_content(&input), Some("help".to_string()));
+    }
+
+    #[test]
+    fn detect_help_on_cargo_list_output() {
+        let input = lines(
+            "Installed Commands:\n    audit        Audit Cargo.lock files\n    edit         Edit Cargo deps\n",
+        );
+        assert_eq!(detect_profile_from_content(&input), Some("help".to_string()));
+    }
+
+    #[test]
+    fn detect_help_requires_two_indented_items() {
+        let input = lines("Available recipes:\n    build\nnot indented\n");
+        assert_eq!(detect_profile_from_content(&input), None);
+    }
+
+    #[test]
+    fn detect_help_ignores_plain_prose_without_header() {
+        let input = lines(
+            "This is some text that happens to be\n    indented in places\n    but has no header\n",
+        );
+        assert_eq!(detect_profile_from_content(&input), None);
+    }
+
+    #[test]
+    fn detect_help_section_header_recognized() {
+        assert!(is_section_header("Available recipes:"));
+        assert!(is_section_header("Options:"));
+        assert!(is_section_header("Usage:"));
+        assert!(is_section_header("Installed Commands:"));
+        assert!(!is_section_header("ERROR: something went wrong"));
+        assert!(!is_section_header("foo:bar"));
+        assert!(!is_section_header("lowercase:"));
+        assert!(!is_section_header("[OPTIONS]:"));
     }
 
     #[test]
