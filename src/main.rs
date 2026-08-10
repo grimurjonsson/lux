@@ -10,6 +10,7 @@ use lux::config;
 use lux::engine::Engine;
 use lux::filter::LineFilter;
 use lux::follow;
+use lux::md_include::{render_root, IncludeCtx};
 use lux::md_table::{FeedResult, FlushResult, TableAssembler};
 use lux::output::detect_color_mode;
 use lux::rules::build_rules_with_config;
@@ -323,6 +324,20 @@ fn run() -> anyhow::Result<()> {
         None
     };
 
+    // Include expansion: file view only, markdown only, incompatible with
+    // trigger/slow (same composition rule as table rendering).
+    let expand_refs_active = cli.expand_refs
+        && cli.file.is_some()
+        && is_markdown_syntax
+        && !trigger_filter.is_active()
+        && slow_annotator.is_none();
+    if cli.expand_refs && cli.file.is_none() {
+        eprintln!("lux: --expand-refs requires a file argument; ignoring");
+    }
+    if cli.expand_refs && cli.file.is_some() && !is_markdown_syntax {
+        eprintln!("lux: --expand-refs only applies to markdown files; viewing normally");
+    }
+
     let stdout_is_terminal = io::stdout().is_terminal();
     let stdout = io::stdout().lock();
     let mut writer = BufWriter::new(stdout);
@@ -394,7 +409,18 @@ fn run() -> anyhow::Result<()> {
             let mut file = std::fs::File::open(path)
                 .with_context(|| format!("cannot open '{file_path}'"))?;
             let initial_lines = read_initial(&mut file, &line_spec)?;
-            print_lines_filtered(&initial_lines, &mut engine, &mut writer, &mut trigger_filter, &filter, table_assembler.as_mut())?;
+            if expand_refs_active {
+                let ctx = IncludeCtx {
+                    color_enabled: color_mode.color_enabled(),
+                    filter: &filter,
+                };
+                for l in render_root(&initial_lines, path, &mut engine, &ctx) {
+                    writeln!(writer, "{l}")?;
+                }
+                writer.flush()?;
+            } else {
+                print_lines_filtered(&initial_lines, &mut engine, &mut writer, &mut trigger_filter, &filter, table_assembler.as_mut())?;
+            }
             // Done -- return without following
         } else {
             // -F: follow by name, file may not exist yet

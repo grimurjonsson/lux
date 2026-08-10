@@ -1587,3 +1587,104 @@ fn md_table_follow_mode_renders_after_idle() {
         "table should render after idle flush: {after:?} (before marker: {before:?})"
     );
 }
+
+// === --expand-refs cat-path integration tests ===
+
+#[test]
+fn expand_refs_expands_include() {
+    let dir = TempDir::new().unwrap();
+    std::fs::write(dir.path().join("child.md"), "child content\n").unwrap();
+    let root = dir.path().join("root.md");
+    std::fs::write(&root, "before\n@child.md\nafter\n").unwrap();
+    let output = StdCommand::new(lux_bin())
+        .args(["--color", "never", "--expand-refs", root.to_str().unwrap()])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("┌─ child.md "), "{stdout}");
+    assert!(stdout.contains("│ child content"), "{stdout}");
+    assert!(stdout.contains("└─"), "{stdout}");
+}
+
+#[test]
+fn expand_refs_off_is_passthrough() {
+    let dir = TempDir::new().unwrap();
+    std::fs::write(dir.path().join("child.md"), "child content\n").unwrap();
+    let root = dir.path().join("root.md");
+    let src = "before\n@child.md\nafter\n";
+    std::fs::write(&root, src).unwrap();
+    let output = StdCommand::new(lux_bin())
+        .args(["--color", "never", root.to_str().unwrap()])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&output.stdout), src);
+}
+
+#[test]
+fn expand_refs_missing_file_note_and_success() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().join("root.md");
+    std::fs::write(&root, "@gone.md\nafter\n").unwrap();
+    let output = StdCommand::new(lux_bin())
+        .args(["--color", "never", "--expand-refs", root.to_str().unwrap()])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "must not abort");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("not found"), "{stdout}");
+    assert!(stdout.contains("after"), "{stdout}");
+}
+
+#[test]
+fn expand_refs_stdin_warns_and_passes_through() {
+    let output = lux()
+        .arg("--color")
+        .arg("never")
+        .arg("--expand-refs")
+        .write_stdin("# Doc\n\n@child.md\n")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.contains("@child.md"), "unexpanded: {stdout}");
+    assert!(stderr.contains("--expand-refs"), "warning expected: {stderr}");
+}
+
+#[test]
+fn expand_refs_non_markdown_warns_and_views_normally() {
+    let dir = TempDir::new().unwrap();
+    let f = dir.path().join("app.log");
+    std::fs::write(&f, "line one\n@child.md\n").unwrap();
+    let output = StdCommand::new(lux_bin())
+        .args(["--color", "never", "--expand-refs", f.to_str().unwrap()])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.contains("@child.md"), "unexpanded: {stdout}");
+    assert!(stderr.contains("--expand-refs"), "warning expected: {stderr}");
+}
+
+#[test]
+fn expand_refs_nested_with_table_colored() {
+    let dir = TempDir::new().unwrap();
+    std::fs::write(dir.path().join("table.md"), "| a | b |\n|---|---|\n| 1 | 2 |\n").unwrap();
+    std::fs::write(dir.path().join("mid.md"), "mid\n@table.md\n").unwrap();
+    let root = dir.path().join("root.md");
+    std::fs::write(&root, "@mid.md\n").unwrap();
+    let output = StdCommand::new(lux_bin())
+        .args(["--color", "always", "--expand-refs", root.to_str().unwrap()])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("┬"), "boxed table inside nested include: {stdout}");
+    assert!(stdout.contains("\x1b["), "colored output: {stdout}");
+}
