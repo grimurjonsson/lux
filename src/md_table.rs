@@ -182,6 +182,131 @@ pub fn render_inline(text: &str, header: bool) -> (String, usize) {
     (styled, width)
 }
 
+/// Streaming state machine: feed lines, get passthrough lines or rendered
+/// tables. Holds at most one line of lookahead (a candidate header waiting
+/// for its delimiter row).
+pub struct TableAssembler {
+    state: State,
+}
+
+enum State {
+    Idle,
+    Candidate(String),
+    InTable(Table),
+}
+
+/// Outcome of feeding a line to the assembler.
+#[derive(Debug)]
+pub enum FeedResult {
+    /// Line(s) passed through unchanged. Emitted in order when a candidate fails to become
+    /// a table or when a table ends.
+    Pass(Vec<String>),
+    /// Line held for lookahead: it could be a header or a table row.
+    Buffered,
+    /// Table rendering complete; rendered lines and optional trailing line to pass to engine.
+    Table {
+        /// Box-drawn ANSI output lines.
+        rendered: Vec<String>,
+        /// The line that ended the table (blank line, non-table line, etc.), if any.
+        trailing: Option<String>,
+    },
+}
+
+/// Outcome of flushing buffered content at end-of-input.
+#[derive(Debug)]
+pub enum FlushResult {
+    /// Nothing held.
+    Nothing,
+    /// Held candidate line that never formed a table.
+    Raw(String),
+    /// Buffered table rendered and returned.
+    Table(Vec<String>),
+}
+
+impl TableAssembler {
+    /// Create a new idle assembler with no buffered content.
+    pub fn new() -> Self {
+        Self { state: State::Idle }
+    }
+
+    /// Return true if a line is currently buffered (candidate header or in-table state).
+    pub fn has_buffered(&self) -> bool {
+        !matches!(self.state, State::Idle)
+    }
+
+    /// Feed a line to the assembler.
+    ///
+    /// - Returns `Pass(lines)` if the input and/or previously buffered content should be passed
+    ///   through unchanged to the engine.
+    /// - Returns `Buffered` if the line is held for lookahead (candidate or table row).
+    /// - Returns `Table { rendered, trailing }` if the input ended the table; table is rendered,
+    ///   and `trailing` is passed through separately (may contain empty string or actual content).
+    pub fn feed(&mut self, line: &str) -> FeedResult {
+        match std::mem::replace(&mut self.state, State::Idle) {
+            State::Idle => {
+                if looks_like_row(line) {
+                    self.state = State::Candidate(line.to_string());
+                    FeedResult::Buffered
+                } else {
+                    FeedResult::Pass(vec![line.to_string()])
+                }
+            }
+            State::Candidate(held) => {
+                if let Some(aligns) = is_delimiter_row(line) {
+                    let header = split_cells(&held);
+                    if header.len() == aligns.len() {
+                        self.state = State::InTable(Table {
+                            header,
+                            aligns,
+                            rows: vec![],
+                        });
+                        return FeedResult::Buffered;
+                    }
+                }
+                // Not a confirming delimiter: release held line. The current
+                // line may itself start a new candidate.
+                if looks_like_row(line) {
+                    self.state = State::Candidate(line.to_string());
+                    FeedResult::Pass(vec![held])
+                } else {
+                    FeedResult::Pass(vec![held, line.to_string()])
+                }
+            }
+            State::InTable(mut table) => {
+                if looks_like_row(line) {
+                    table.rows.push(split_cells(line));
+                    self.state = State::InTable(table);
+                    FeedResult::Buffered
+                } else {
+                    FeedResult::Table {
+                        rendered: render_table(&table),
+                        trailing: Some(line.to_string()),
+                    }
+                }
+            }
+        }
+    }
+
+    /// Flush buffered content at end-of-input.
+    ///
+    /// - If idle, returns `Nothing`.
+    /// - If a candidate header is held, returns `Raw(line)`.
+    /// - If a table is in progress, renders and returns `Table(lines)`.
+    pub fn flush(&mut self) -> FlushResult {
+        match std::mem::replace(&mut self.state, State::Idle) {
+            State::Idle => FlushResult::Nothing,
+            State::Candidate(held) => FlushResult::Raw(held),
+            State::InTable(table) => FlushResult::Table(render_table(&table)),
+        }
+    }
+}
+
+impl Default for TableAssembler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Render a parsed table as box-drawn ANSI lines with styled borders and header.
 ///
 /// Returns one line per output row: top border, header, middle border (if data),
@@ -524,5 +649,129 @@ mod tests {
         let lines: Vec<String> = render_table(&t).iter().map(|l| strip_ansi(l)).collect();
         // visible "hi" (2 wide) < "A"… column width is max(1, 2) = 2
         assert_eq!(lines[3], "│ hi │");
+    }
+
+    fn feed_all(a: &mut TableAssembler, lines: &[&str]) -> Vec<FeedResult> {
+        lines.iter().map(|l| a.feed(l)).collect()
+    }
+
+    #[test]
+    fn assembler_passes_plain_lines() {
+        let mut a = TableAssembler::new();
+        match a.feed("hello world") {
+            FeedResult::Pass(v) => assert_eq!(v, vec!["hello world"]),
+            other => panic!("expected Pass, got {other:?}"),
+        }
+        assert!(!a.has_buffered());
+    }
+
+    #[test]
+    fn assembler_holds_candidate_then_releases() {
+        let mut a = TableAssembler::new();
+        assert!(matches!(a.feed("| a | b |"), FeedResult::Buffered));
+        assert!(a.has_buffered());
+        // next line is not a delimiter → both released in order
+        match a.feed("plain") {
+            FeedResult::Pass(v) => assert_eq!(v, vec!["| a | b |", "plain"]),
+            other => panic!("expected Pass, got {other:?}"),
+        }
+        assert!(!a.has_buffered());
+    }
+
+    #[test]
+    fn assembler_candidate_then_new_candidate() {
+        let mut a = TableAssembler::new();
+        assert!(matches!(a.feed("| a | b |"), FeedResult::Buffered));
+        // pipe-y line that is not a delimiter → old released, new held
+        match a.feed("| c | d |") {
+            FeedResult::Pass(v) => assert_eq!(v, vec!["| a | b |"]),
+            other => panic!("expected Pass, got {other:?}"),
+        }
+        assert!(a.has_buffered());
+    }
+
+    #[test]
+    fn assembler_renders_table_on_end() {
+        let mut a = TableAssembler::new();
+        feed_all(&mut a, &["| a | b |", "|---|---|", "| 1 | 2 |"]);
+        match a.feed("after") {
+            FeedResult::Table { rendered, trailing } => {
+                assert!(rendered[0].contains('┌'));
+                assert_eq!(rendered.len(), 5); // top, header, sep, 1 row, bottom
+                assert_eq!(trailing.as_deref(), Some("after"));
+            }
+            other => panic!("expected Table, got {other:?}"),
+        }
+        assert!(!a.has_buffered());
+    }
+
+    #[test]
+    fn assembler_blank_line_ends_table() {
+        let mut a = TableAssembler::new();
+        feed_all(&mut a, &["| a |", "|---|", "| 1 |"]);
+        match a.feed("") {
+            FeedResult::Table { trailing, .. } => assert_eq!(trailing.as_deref(), Some("")),
+            other => panic!("expected Table, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn assembler_delimiter_count_mismatch_not_a_table() {
+        let mut a = TableAssembler::new();
+        assert!(matches!(a.feed("| a | b |"), FeedResult::Buffered));
+        // 3-column delimiter under a 2-column header: GFM says not a table.
+        // The delimiter line is itself pipe-y → becomes the new candidate.
+        match a.feed("|---|---|---|") {
+            FeedResult::Pass(v) => assert_eq!(v, vec!["| a | b |"]),
+            other => panic!("expected Pass, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn assembler_delimiter_without_header_passes_raw() {
+        let mut a = TableAssembler::new();
+        // no candidate held; a delimiter row is just a pipe-y candidate line
+        assert!(matches!(a.feed("|---|---|"), FeedResult::Buffered));
+        match a.feed("plain") {
+            FeedResult::Pass(v) => assert_eq!(v, vec!["|---|---|", "plain"]),
+            other => panic!("expected Pass, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn assembler_flush_mid_table_renders() {
+        let mut a = TableAssembler::new();
+        feed_all(&mut a, &["| a |", "|---|", "| 1 |"]);
+        match a.flush() {
+            FlushResult::Table(lines) => assert!(lines[0].contains('┌')),
+            other => panic!("expected Table, got {other:?}"),
+        }
+        assert!(!a.has_buffered());
+    }
+
+    #[test]
+    fn assembler_flush_held_candidate_raw() {
+        let mut a = TableAssembler::new();
+        a.feed("| a | b |");
+        match a.flush() {
+            FlushResult::Raw(l) => assert_eq!(l, "| a | b |"),
+            other => panic!("expected Raw, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn assembler_flush_idle_nothing() {
+        let mut a = TableAssembler::new();
+        assert!(matches!(a.flush(), FlushResult::Nothing));
+    }
+
+    #[test]
+    fn assembler_header_only_table_at_flush() {
+        let mut a = TableAssembler::new();
+        feed_all(&mut a, &["| a | b |", "|---|---|"]);
+        match a.flush() {
+            FlushResult::Table(lines) => assert_eq!(lines.len(), 3), // header-only box
+            other => panic!("expected Table, got {other:?}"),
+        }
     }
 }
