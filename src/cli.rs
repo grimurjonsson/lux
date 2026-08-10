@@ -60,6 +60,14 @@ pub struct Cli {
     #[arg(short = 'F', conflicts_with = "follow_descriptor")]
     pub follow_name: bool,
 
+    /// Expand own-line @file.md references inline when viewing markdown.
+    #[arg(
+        long = "expand-refs",
+        visible_alias = "expand-referenced-files",
+        conflicts_with_all = ["follow_descriptor", "follow_name"]
+    )]
+    pub expand_refs: bool,
+
     /// Open file in interactive pager mode (like less)
     #[arg(long, conflicts_with_all = ["follow_descriptor", "follow_name", "cat"])]
     pub less: bool,
@@ -578,5 +586,29 @@ mod tests {
             }
             _ => panic!("expected Config DefaultFileMode"),
         }
+    }
+
+    #[test]
+    fn test_expand_refs_flag() {
+        let cli = Cli::try_parse_from(["lux", "--expand-refs", "file.md"]).unwrap();
+        assert!(cli.expand_refs);
+    }
+
+    #[test]
+    fn test_expand_refs_alias() {
+        let cli = Cli::try_parse_from(["lux", "--expand-referenced-files", "file.md"]).unwrap();
+        assert!(cli.expand_refs);
+    }
+
+    #[test]
+    fn test_expand_refs_default_off() {
+        let cli = Cli::try_parse_from(["lux", "file.md"]).unwrap();
+        assert!(!cli.expand_refs);
+    }
+
+    #[test]
+    fn test_expand_refs_conflicts_with_follow() {
+        assert!(Cli::try_parse_from(["lux", "-f", "--expand-refs", "file.md"]).is_err());
+        assert!(Cli::try_parse_from(["lux", "-F", "--expand-refs", "file.md"]).is_err());
     }
 }
