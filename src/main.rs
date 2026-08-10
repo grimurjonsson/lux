@@ -387,7 +387,7 @@ fn run() -> anyhow::Result<()> {
                 None
             };
             let filter_opt = if filter.is_active() { Some(&filter) } else { None };
-            follow::run(path, follow::FollowMode::Descriptor, file, &mut engine, &mut writer, trigger_opt, filter_opt, slow_annotator)?;
+            follow::run(path, follow::FollowMode::Descriptor, file, &mut engine, &mut writer, trigger_opt, filter_opt, slow_annotator, table_assembler.as_mut())?;
         } else if is_print_and_exit {
             // Print-and-exit: file + explicit -n + no follow flag
             let mut file = std::fs::File::open(path)
@@ -407,7 +407,7 @@ fn run() -> anyhow::Result<()> {
                         None
                     };
                     let filter_opt = if filter.is_active() { Some(&filter) } else { None };
-                    follow::run(path, follow::FollowMode::Name, file, &mut engine, &mut writer, trigger_opt, filter_opt, slow_annotator)?;
+                    follow::run(path, follow::FollowMode::Name, file, &mut engine, &mut writer, trigger_opt, filter_opt, slow_annotator, table_assembler.as_mut())?;
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                     eprintln!(
@@ -420,7 +420,7 @@ fn run() -> anyhow::Result<()> {
                         None
                     };
                     let filter_opt = if filter.is_active() { Some(&filter) } else { None };
-                    follow::run_waiting(path, &mut engine, &mut writer, trigger_opt, filter_opt, slow_annotator)?;
+                    follow::run_waiting(path, &mut engine, &mut writer, trigger_opt, filter_opt, slow_annotator, table_assembler.as_mut())?;
                 }
                 Err(e) => return Err(e).with_context(|| format!("cannot open '{file_path}'")),
             }

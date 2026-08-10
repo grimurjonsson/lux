@@ -1504,3 +1504,38 @@ fn non_md_file_tables_untouched() {
     assert!(output.status.success(), "lux should exit successfully: {:?}", output.status);
     assert!(!stdout.contains('┌'), "non-markdown must not box-draw: {stdout}");
 }
+
+#[test]
+fn md_table_follow_mode_renders_after_idle() {
+    let dir = TempDir::new().unwrap();
+    let md = dir.path().join("t.md");
+    std::fs::write(&md, "start\n").unwrap();
+
+    let mut child = StdCommand::new(assert_cmd::cargo::cargo_bin("lux"))
+        .arg("--color")
+        .arg("always")
+        .arg("-f")
+        .arg(md.to_str().unwrap())
+        .stdout(Stdio::piped())
+        .stdin(Stdio::null())
+        .spawn()
+        .unwrap();
+
+    // Append a complete table, then wait past the idle-flush window (250ms poll).
+    std::thread::sleep(Duration::from_millis(300));
+    {
+        use std::io::Write as _;
+        let mut f = std::fs::OpenOptions::new().append(true).open(&md).unwrap();
+        writeln!(f, "| a | b |").unwrap();
+        writeln!(f, "|---|---|").unwrap();
+        writeln!(f, "| 1 | 2 |").unwrap();
+    }
+    std::thread::sleep(Duration::from_millis(800));
+    child.kill().unwrap();
+    let output = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains('┌'),
+        "table should render after idle flush: {stdout}"
+    );
+}
