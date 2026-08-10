@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use owo_colors::{OwoColorize, Style};
+use unicode_width::UnicodeWidthStr;
 use crate::engine::Engine;
 use crate::filter::LineFilter;
 use crate::md_table::{is_fence_toggle, FeedResult, FlushResult, TableAssembler};
@@ -55,7 +56,7 @@ fn styled(text: &str, style: Option<Style>) -> String {
 pub(crate) fn header_line(path: &str, depth: usize, color_enabled: bool) -> String {
     let style = depth_style(depth, color_enabled);
     let lead = "┌─ ";
-    let used = lead.chars().count() + path.chars().count() + 1;
+    let used = lead.chars().count() + UnicodeWidthStr::width(path) + 1;
     let dashes = FRAME_WIDTH.saturating_sub(used).max(3);
     let name = if color_enabled {
         path.style(Style::new().dimmed()).to_string()
@@ -157,14 +158,13 @@ fn render_lines(
         // structural directive, not content — filters must not suppress
         // expansion. Toggle lines can't be refs; inside fences refs are
         // literal text.
-        if !in_fence && !toggled {
-            if let Some(ref_path) = detect_ref(raw) {
-                if let Some(t) = table.as_mut() {
-                    flush_table(&mut out, engine, t);
-                }
-                out.extend(render_included(ref_path, base_dir, depth + 1, visited, engine, ctx));
-                continue;
+        if !in_fence && !toggled
+            && let Some(ref_path) = detect_ref(raw) {
+            if let Some(t) = table.as_mut() {
+                flush_table(&mut out, engine, t);
             }
+            out.extend(render_included(ref_path, base_dir, depth + 1, visited, engine, ctx));
+            continue;
         }
 
         if ctx.filter.is_active() && !ctx.filter.should_show(raw) {
@@ -277,6 +277,13 @@ mod tests {
         let h2 = strip_ansi(&header_line(long, 1, true));
         assert!(h2.ends_with("───"));
         assert!(h2.chars().count() > 40);
+    }
+
+    #[test]
+    fn header_with_cjk_uses_display_width() {
+        let h = strip_ansi(&header_line("日本.md", 1, true));
+        assert!(h.starts_with("┌─ 日本.md "));
+        assert_eq!(UnicodeWidthStr::width(h.as_str()), 40, "CJK path should pad to 40 display columns");
     }
 
     #[test]
@@ -464,5 +471,21 @@ mod tests {
         assert!(out.contains(&"│ keep this".to_string()));
         assert!(!out.iter().any(|l| l.contains("drop this")));
         assert!(out[0].starts_with("┌─"), "frames unaffected by filter");
+    }
+
+    #[test]
+    fn table_flushed_before_ref() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("child.md"), "child\n").unwrap();
+        fs::write(
+            dir.path().join("root.md"),
+            "| a | b |\n|---|---|\n| 1 | 2 |\n@child.md\n",
+        )
+        .unwrap();
+        let out = render(&dir, "root.md", true);
+        let table_line_idx = out.iter().position(|l| l.contains('┬')).expect("table rendered with box-drawn chars");
+        let header_frame_idx = out.iter().position(|l| l.contains("┌─ child.md")).expect("child header frame present");
+        assert!(table_line_idx < header_frame_idx, "table must be flushed before child header frame: table at {}, header at {}", table_line_idx, header_frame_idx);
+        assert!(out.iter().any(|l| l.contains("│ ")), "child gutter lines present");
     }
 }
