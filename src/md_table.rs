@@ -125,6 +125,41 @@ fn base_style(header: bool) -> Style {
     }
 }
 
+/// True if `c` counts as a "word" character for emphasis-flanking checks:
+/// letters, digits, and underscore.
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+/// GFM-inspired flanking check for `_`/`__` emphasis: an underscore
+/// delimiter must not be used intraword. Requires an explicit non-word
+/// character immediately outside both delimiters -- a bare string edge does
+/// not count, since a leading/trailing `_`/`__` in cell content is more
+/// often part of a larger identifier (e.g. `__init__`) than intentional
+/// emphasis.
+fn underscore_flanks_ok(text: &str, start: usize, end: usize) -> bool {
+    let before_ok = text[..start].chars().next_back().is_some_and(|c| !is_word_char(c));
+    let after_ok = text[end..].chars().next().is_some_and(|c| !is_word_char(c));
+    before_ok && after_ok
+}
+
+/// GFM flanking check for `*`/`**` emphasis: the inner text must not start
+/// or end with whitespace (rejects e.g. `2 * 3 * 4`).
+fn asterisk_inner_ok(inner: &str) -> bool {
+    let starts_ws = inner.chars().next().is_some_and(|c| c.is_whitespace());
+    let ends_ws = inner.chars().next_back().is_some_and(|c| c.is_whitespace());
+    !starts_ws && !ends_ws
+}
+
+/// Render GFM inline emphasis, code spans, links, and strikethrough within a
+/// single table cell as ANSI-styled text.
+///
+/// Markers are stripped and replaced with terminal styling (bold, italic,
+/// strikethrough, colored code/link text). Matches that violate GFM
+/// emphasis-flanking rules (intraword `_`/`__`, whitespace-flanked
+/// `*`/`**`) are left verbatim rather than styled. Returns the styled string
+/// together with its visible (Unicode) width, ignoring any ANSI codes
+/// already present in `text` -- `header` bolds plain (unstyled) segments too.
 pub fn render_inline(text: &str, header: bool) -> (String, usize) {
     let mut styled = String::new();
     let mut plain = String::new();
@@ -146,34 +181,44 @@ pub fn render_inline(text: &str, header: bool) -> (String, usize) {
         let whole = caps.get(0).unwrap();
         push_plain(&mut styled, &mut plain, &text[last..whole.start()]);
 
-        let (inner, style) = if let Some(m) = caps.name("code") {
+        // `accepted` is `None` when GFM flanking rules reject this match;
+        // the whole match then falls through to verbatim output below.
+        let accepted: Option<(&str, Style)> = if let Some(m) = caps.name("code") {
             let s = m.as_str();
-            (
-                &s[1..s.len() - 1],
-                base_style(header).truecolor(166, 227, 161),
-            )
+            Some((&s[1..s.len() - 1], base_style(header).truecolor(166, 227, 161)))
         } else if caps.name("link").is_some() {
-            (
+            Some((
                 caps.name("ltext").unwrap().as_str(),
                 base_style(header).truecolor(137, 180, 250).underline(),
-            )
+            ))
         } else if caps.name("bold").is_some() {
-            (caps.name("btext").unwrap().as_str(), base_style(header).bold())
+            let inner = caps.name("btext").unwrap().as_str();
+            asterisk_inner_ok(inner).then(|| (inner, base_style(header).bold()))
         } else if caps.name("bold2").is_some() {
-            (caps.name("b2text").unwrap().as_str(), base_style(header).bold())
+            let inner = caps.name("b2text").unwrap().as_str();
+            underscore_flanks_ok(text, whole.start(), whole.end())
+                .then(|| (inner, base_style(header).bold()))
         } else if caps.name("strike").is_some() {
-            (
+            Some((
                 caps.name("stext").unwrap().as_str(),
                 base_style(header).strikethrough(),
-            )
+            ))
         } else if caps.name("italic").is_some() {
-            (caps.name("itext").unwrap().as_str(), base_style(header).italic())
+            let inner = caps.name("itext").unwrap().as_str();
+            asterisk_inner_ok(inner).then(|| (inner, base_style(header).italic()))
         } else {
-            (caps.name("i2text").unwrap().as_str(), base_style(header).italic())
+            let inner = caps.name("i2text").unwrap().as_str();
+            underscore_flanks_ok(text, whole.start(), whole.end())
+                .then(|| (inner, base_style(header).italic()))
         };
 
-        styled.push_str(&inner.style(style).to_string());
-        plain.push_str(inner);
+        match accepted {
+            Some((inner, style)) => {
+                styled.push_str(&inner.style(style).to_string());
+                plain.push_str(inner);
+            }
+            None => push_plain(&mut styled, &mut plain, whole.as_str()),
+        }
         last = whole.end();
     }
     push_plain(&mut styled, &mut plain, &text[last..]);
@@ -536,6 +581,48 @@ mod tests {
     fn inline_width_cjk() {
         let (_, width) = render_inline("日本", false);
         assert_eq!(width, 4);
+    }
+
+    #[test]
+    fn inline_intraword_underscore_verbatim() {
+        // GFM intraword emphasis: identifiers with underscores must survive
+        // untouched -- no deletion, no accidental italics.
+        let (styled, width) = render_inline("get_user_id", false);
+        assert_eq!(styled, "get_user_id");
+        assert_eq!(width, 11);
+    }
+
+    #[test]
+    fn inline_intraword_dunder_verbatim() {
+        let (styled, width) = render_inline("__init__", false);
+        assert_eq!(styled, "__init__");
+        assert_eq!(width, 8);
+    }
+
+    #[test]
+    fn inline_asterisk_with_whitespace_flanking_verbatim() {
+        // Inner text flanked by whitespace (e.g. multiplication) must not be
+        // treated as emphasis.
+        let (styled, width) = render_inline("2 * 3 * 4", false);
+        assert_eq!(styled, "2 * 3 * 4");
+        assert_eq!(width, 9);
+    }
+
+    #[test]
+    fn inline_bold_asterisk_still_works_near_underscore_identifier() {
+        let (styled, _) = render_inline("snake_case in **bold**", false);
+        assert!(!styled.contains("**"), "markers must be stripped: {styled:?}");
+        assert!(styled.contains("bold"));
+        assert!(styled.contains("snake_case"), "identifier must survive: {styled:?}");
+        assert!(styled.contains("\x1b["), "bold should carry ANSI styling: {styled:?}");
+    }
+
+    #[test]
+    fn inline_underscore_emphasis_still_works_with_space_flanking() {
+        let (styled, _) = render_inline("a _real_ emphasis", false);
+        assert!(!styled.contains('_'), "markers must be stripped: {styled:?}");
+        assert!(styled.contains("real"));
+        assert!(styled.contains("\x1b["), "italic should carry ANSI styling: {styled:?}");
     }
 
     #[test]
