@@ -31,6 +31,7 @@ impl Drop for TerminalGuard {
 ///
 /// `raw_lines` should contain the full file content (all lines).
 /// Lines are filtered, colorized, and displayed interactively.
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     file_path: &Path,
     engine: &mut Engine,
@@ -126,7 +127,7 @@ fn colorize_lines(
                 },
             }
         }
-        if let Some(t) = table.as_deref_mut() {
+        if let Some(t) = table {
             match t.flush() {
                 FlushResult::Nothing => {}
                 FlushResult::Raw(r) => result.extend(engine.apply(&r).flatten()),

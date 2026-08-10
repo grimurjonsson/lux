@@ -1487,6 +1487,32 @@ fn md_table_via_stdin_sniff() {
 }
 
 #[test]
+fn md_table_color_never_byte_identical_passthrough() {
+    // Locks in the passthrough guarantee: with color disabled, a markdown
+    // file containing a table must come back out byte-for-byte unchanged.
+    let dir = TempDir::new().unwrap();
+    let md = dir.path().join("t.md");
+    let content = "# Title\n\n| Name | Value |\n|------|-------|\n| foo | 12 |\n\nafter\n";
+    std::fs::write(&md, content).unwrap();
+    let output = StdCommand::new(lux_bin())
+        .arg("--color")
+        .arg("never")
+        .arg(md.to_str().unwrap())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("failed to run lux");
+    assert!(output.status.success(), "lux should exit successfully: {:?}", output.status);
+    assert_eq!(
+        output.stdout,
+        content.as_bytes(),
+        "stdout must be byte-identical to the source file: {:?}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+#[test]
 fn non_md_file_tables_untouched() {
     let dir = TempDir::new().unwrap();
     let f = dir.path().join("t.log");

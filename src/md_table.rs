@@ -702,21 +702,14 @@ mod tests {
 
     #[test]
     fn render_alignment() {
+        // widths of 1 make alignment invisible, so use a wider header.
         let t = Table {
-            header: vec!["L".into(), "C".into(), "R".into()],
-            aligns: vec![Alignment::Left, Alignment::Center, Alignment::Right],
-            rows: vec![vec!["a".into(), "b".into(), "c".into()]],
-        };
-        let lines: Vec<String> = render_table(&t).iter().map(|l| strip_ansi(l)).collect();
-        // widths are all 1 → alignment is invisible at width 1; use wider header
-        let t2 = Table {
             header: vec!["Col1".into(), "Col2".into(), "Col3".into()],
             aligns: vec![Alignment::Left, Alignment::Center, Alignment::Right],
             rows: vec![vec!["a".into(), "b".into(), "c".into()]],
         };
-        let lines2: Vec<String> = render_table(&t2).iter().map(|l| strip_ansi(l)).collect();
-        assert_eq!(lines2[3], "│ a    │  b   │    c │");
-        drop(lines);
+        let lines: Vec<String> = render_table(&t).iter().map(|l| strip_ansi(l)).collect();
+        assert_eq!(lines[3], "│ a    │  b   │    c │");
     }
 
     #[test]

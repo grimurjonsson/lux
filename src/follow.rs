@@ -293,24 +293,24 @@ pub fn run(
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 // Idle: if a table is mid-assembly, render what we have now
                 // rather than holding output indefinitely.
-                if let Some(t) = table.as_deref_mut() {
-                    if t.has_buffered() {
-                        match t.flush() {
-                            FlushResult::Nothing => {}
-                            FlushResult::Raw(raw) => {
-                                let result = engine.apply(&raw);
-                                for l in result.flatten() {
-                                    writeln!(writer, "{l}")?;
-                                }
-                            }
-                            FlushResult::Table(rendered) => {
-                                for l in rendered {
-                                    writeln!(writer, "{l}")?;
-                                }
+                if let Some(t) = table.as_deref_mut()
+                    && t.has_buffered()
+                {
+                    match t.flush() {
+                        FlushResult::Nothing => {}
+                        FlushResult::Raw(raw) => {
+                            let result = engine.apply(&raw);
+                            for l in result.flatten() {
+                                writeln!(writer, "{l}")?;
                             }
                         }
-                        writer.flush()?;
+                        FlushResult::Table(rendered) => {
+                            for l in rendered {
+                                writeln!(writer, "{l}")?;
+                            }
+                        }
                     }
+                    writer.flush()?;
                 }
                 consecutive_timeouts += 1;
 
