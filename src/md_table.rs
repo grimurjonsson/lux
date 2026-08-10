@@ -232,6 +232,15 @@ pub fn render_inline(text: &str, header: bool) -> (String, usize) {
 /// for its delimiter row).
 pub struct TableAssembler {
     state: State,
+    /// True while inside a fenced code block (``` or ~~~); table detection
+    /// is suspended and every line passes through verbatim.
+    in_fence: bool,
+}
+
+/// True if the line's trimmed start opens or closes a fenced code block.
+fn is_fence_toggle(line: &str) -> bool {
+    let t = line.trim_start();
+    t.starts_with("```") || t.starts_with("~~~")
 }
 
 enum State {
@@ -271,7 +280,7 @@ pub enum FlushResult {
 impl TableAssembler {
     /// Create a new idle assembler with no buffered content.
     pub fn new() -> Self {
-        Self { state: State::Idle }
+        Self { state: State::Idle, in_fence: false }
     }
 
     /// Return true if a line is currently buffered (candidate header or in-table state).
@@ -287,9 +296,19 @@ impl TableAssembler {
     /// - Returns `Table { rendered, trailing }` if the input ended the table; table is rendered,
     ///   and `trailing` is passed through separately (may contain empty string or actual content).
     pub fn feed(&mut self, line: &str) -> FeedResult {
+        if self.in_fence {
+            if is_fence_toggle(line) {
+                self.in_fence = false;
+            }
+            return FeedResult::Pass(vec![line.to_string()]);
+        }
+
         match std::mem::replace(&mut self.state, State::Idle) {
             State::Idle => {
-                if looks_like_row(line) {
+                if is_fence_toggle(line) {
+                    self.in_fence = true;
+                    FeedResult::Pass(vec![line.to_string()])
+                } else if looks_like_row(line) {
                     self.state = State::Candidate(line.to_string());
                     FeedResult::Buffered
                 } else {
@@ -297,6 +316,10 @@ impl TableAssembler {
                 }
             }
             State::Candidate(held) => {
+                if is_fence_toggle(line) {
+                    self.in_fence = true;
+                    return FeedResult::Pass(vec![held, line.to_string()]);
+                }
                 if let Some(aligns) = is_delimiter_row(line) {
                     let header = split_cells(&held);
                     if header.len() == aligns.len() {
@@ -318,7 +341,13 @@ impl TableAssembler {
                 }
             }
             State::InTable(mut table) => {
-                if looks_like_row(line) {
+                if is_fence_toggle(line) {
+                    self.in_fence = true;
+                    FeedResult::Table {
+                        rendered: render_table(&table),
+                        trailing: Some(line.to_string()),
+                    }
+                } else if looks_like_row(line) {
                     table.rows.push(split_cells(line));
                     self.state = State::InTable(table);
                     FeedResult::Buffered
@@ -860,5 +889,67 @@ mod tests {
             FlushResult::Table(lines) => assert_eq!(lines.len(), 3), // header-only box
             other => panic!("expected Table, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn assembler_fenced_table_passes_through_raw() {
+        let mut a = TableAssembler::new();
+        let lines = ["```", "| a | b |", "|---|---|", "| 1 | 2 |", "```"];
+        for line in lines {
+            match a.feed(line) {
+                FeedResult::Pass(v) => assert_eq!(v, vec![line]),
+                other => panic!("expected Pass for {line:?}, got {other:?}"),
+            }
+        }
+        assert!(!a.has_buffered());
+    }
+
+    #[test]
+    fn assembler_fence_closing_then_real_table_still_renders() {
+        let mut a = TableAssembler::new();
+        for line in ["```", "code here", "```"] {
+            assert!(matches!(a.feed(line), FeedResult::Pass(_)));
+        }
+        feed_all(&mut a, &["| a | b |", "|---|---|", "| 1 | 2 |"]);
+        match a.feed("after") {
+            FeedResult::Table { rendered, trailing } => {
+                assert!(rendered[0].contains('┌'));
+                assert_eq!(trailing.as_deref(), Some("after"));
+            }
+            other => panic!("expected Table, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn assembler_fence_toggle_during_in_table_renders_table() {
+        let mut a = TableAssembler::new();
+        feed_all(&mut a, &["| a | b |", "|---|---|", "| 1 | 2 |"]);
+        match a.feed("```") {
+            FeedResult::Table { rendered, trailing } => {
+                assert!(rendered[0].contains('┌'));
+                assert_eq!(trailing.as_deref(), Some("```"));
+            }
+            other => panic!("expected Table, got {other:?}"),
+        }
+        // Assembler is now inside the fence: subsequent lines pass through
+        // raw, even ones that look like table rows.
+        match a.feed("| c | d |") {
+            FeedResult::Pass(v) => assert_eq!(v, vec!["| c | d |"]),
+            other => panic!("expected Pass, got {other:?}"),
+        }
+        assert!(!a.has_buffered());
+    }
+
+    #[test]
+    fn assembler_tilde_fence_also_toggles() {
+        let mut a = TableAssembler::new();
+        assert!(matches!(a.feed("~~~"), FeedResult::Pass(_)));
+        match a.feed("| a | b |") {
+            FeedResult::Pass(v) => assert_eq!(v, vec!["| a | b |"]),
+            other => panic!("expected Pass (still fenced), got {other:?}"),
+        }
+        assert!(matches!(a.feed("~~~"), FeedResult::Pass(_)));
+        // Fence closed: normal candidate detection resumes.
+        assert!(matches!(a.feed("| a | b |"), FeedResult::Buffered));
     }
 }
