@@ -229,14 +229,6 @@ pub fn render_table(table: &Table) -> Vec<String> {
         }
     }
 
-    // If any data row has fewer columns than the header, make all columns equal width
-    let header_ncols = table.header.len();
-    let rows_shorter_than_header = table.rows.iter().any(|r| r.len() < header_ncols);
-    if rows_shorter_than_header {
-        let max_width = widths.iter().copied().max().unwrap_or(1);
-        widths = vec![max_width; ncols];
-    }
-
     let border = |left: char, mid: char, right: char| -> String {
         let inner: Vec<String> = widths.iter().map(|w| "─".repeat(w + 2)).collect();
         format!("{left}{}{right}", inner.join(&mid.to_string()))
@@ -494,7 +486,7 @@ mod tests {
             rows: vec![vec!["only".into()]],
         };
         let lines: Vec<String> = render_table(&t).iter().map(|l| strip_ansi(l)).collect();
-        assert_eq!(lines[3], "│ only │      │");
+        assert_eq!(lines[3], "│ only │   │");
     }
 
     #[test]
