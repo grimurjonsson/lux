@@ -381,16 +381,25 @@ fn run() -> anyhow::Result<()> {
                 .with_context(|| format!("cannot open '{file_path}'"))?;
             let lines = tail::read_from_line(&mut file, 1)?;
             let rule_count = engine.rule_count();
-            lux::pager::run(
-                path,
-                &mut engine,
-                &filter,
-                &mut trigger_filter,
-                active_profile_name.as_deref(),
-                rule_count,
-                &lines,
-                table_assembler.as_mut(),
-            )?;
+            if expand_refs_active {
+                let ctx = IncludeCtx {
+                    color_enabled: color_mode.color_enabled(),
+                    filter: &filter,
+                };
+                let rendered = render_root(&lines, path, &mut engine, &ctx);
+                lux::pager::run_prerendered(path, active_profile_name.as_deref(), rule_count, &rendered)?;
+            } else {
+                lux::pager::run(
+                    path,
+                    &mut engine,
+                    &filter,
+                    &mut trigger_filter,
+                    active_profile_name.as_deref(),
+                    rule_count,
+                    &lines,
+                    table_assembler.as_mut(),
+                )?;
+            }
         } else if cli.follow_descriptor {
             // -f mode: file MUST exist
             let mut file = std::fs::File::open(path)

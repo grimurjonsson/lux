@@ -44,18 +44,35 @@ pub fn run(
 ) -> Result<()> {
     // Apply filter + engine + trigger to produce colorized ANSI lines
     let colored_lines = colorize_lines(raw_lines, engine, filter, trigger, table);
+    let tui_lines = to_tui_lines(&colored_lines);
+    display(file_path, profile_name, rule_count, tui_lines)
+}
 
-    // Convert ANSI strings to ratatui Lines using ansi-to-tui
-    let tui_lines: Vec<Line<'static>> = colored_lines
+/// Pager over lines that are already fully styled (include expansion).
+pub fn run_prerendered(
+    file_path: &Path,
+    profile_name: Option<&str>,
+    rule_count: usize,
+    colored_lines: &[String],
+) -> Result<()> {
+    display(file_path, profile_name, rule_count, to_tui_lines(colored_lines))
+}
+
+/// Convert ANSI-styled strings to ratatui lines for display.
+fn to_tui_lines(colored_lines: &[String]) -> Vec<Line<'static>> {
+    colored_lines
         .iter()
-        .flat_map(|s| {
-            s.as_bytes()
-                .into_text()
-                .unwrap_or_default()
-                .lines
-        })
-        .collect();
+        .flat_map(|s| s.as_bytes().into_text().unwrap_or_default().lines)
+        .collect()
+}
 
+/// Set up the terminal and run the event loop over pre-converted lines.
+fn display(
+    file_path: &Path,
+    profile_name: Option<&str>,
+    rule_count: usize,
+    tui_lines: Vec<Line<'static>>,
+) -> Result<()> {
     if tui_lines.is_empty() {
         return Ok(());
     }
@@ -266,6 +283,22 @@ fn event_loop(
 mod tests {
     use super::*;
     use crate::md_table::TableAssembler;
+
+    #[test]
+    fn to_tui_lines_preserves_line_count_and_text() {
+        let lines = vec![
+            "plain".to_string(),
+            "\x1b[31mred\x1b[0m".to_string(),
+            "│ gutter".to_string(),
+        ];
+        let tui = to_tui_lines(&lines);
+        assert_eq!(tui.len(), 3);
+        let texts: Vec<String> = tui
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        assert_eq!(texts, vec!["plain", "red", "│ gutter"]);
+    }
 
     #[test]
     fn colorize_lines_renders_tables() {

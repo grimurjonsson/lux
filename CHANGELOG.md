@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   markdown content (file view, pager, stdin, and follow modes). Inline
   markdown in cells (bold, italic, code, links, strikethrough) is styled.
   Raw source is preserved when color is off or output is piped.
+- `--expand-refs` (alias `--expand-referenced-files`): when viewing a
+  markdown file, own-line `@other.md` references expand inline, framed by
+  a per-depth colored gutter bar naming the source file. Recursive with
+  cycle detection and a depth cap; missing files render an inline note.
 
 ## [0.1.14] - 2026-04-22
 Fixed ANSI preservation in pipe mode so external colors survive when lux rules don't claim them. Added markdown auto-detection on stdin and extended the `help` profile so `just --list`-style output gets styled out of the box.

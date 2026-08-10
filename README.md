@@ -95,6 +95,10 @@ lux config default-file-mode cat    # print-and-exit (default)
 Markdown files get an extra touch: GFM tables are rendered as aligned
 box-drawn tables (only when color is on — piped output keeps the raw source).
 
+With `--expand-refs`, a line containing just `@other.md` pulls that file's
+rendered content inline, framed in a colored gutter — includes nest, cycles
+are detected, and missing files degrade to an inline note.
+
 ### Syntax highlighting
 
 Open code and config files with automatic syntax coloring (powered by [syntect](https://github.com/trishume/syntect) with Catppuccin Mocha theme):
