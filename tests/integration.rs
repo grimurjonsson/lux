@@ -1403,3 +1403,104 @@ fn insert_template_with_colons() {
     let lines: Vec<&str> = stdout.lines().collect();
     assert_eq!(lines[0], "--- 12:34:56 ---");
 }
+
+// === Markdown table rendering integration tests ===
+
+#[test]
+fn md_table_box_drawn_with_color() {
+    let dir = TempDir::new().unwrap();
+    let md = dir.path().join("t.md");
+    std::fs::write(
+        &md,
+        "# Title\n\n| Name | Value |\n|------|-------|\n| foo | 12 |\n\nafter\n",
+    )
+    .unwrap();
+    let output = StdCommand::new(lux_bin())
+        .arg("--color")
+        .arg("always")
+        .arg(md.to_str().unwrap())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("failed to run lux");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "lux should exit successfully: {:?}", output.status);
+    assert!(stdout.contains('┌'), "expected box drawing in: {stdout}");
+    assert!(stdout.contains("│"), "expected box borders in: {stdout}");
+    assert!(!stdout.contains("|---"), "raw delimiter should be gone: {stdout}");
+    assert!(stdout.contains("after"), "trailing line preserved: {stdout}");
+}
+
+#[test]
+fn md_table_raw_when_color_never() {
+    let dir = TempDir::new().unwrap();
+    let md = dir.path().join("t.md");
+    std::fs::write(&md, "| a | b |\n|---|---|\n| 1 | 2 |\n").unwrap();
+    let output = StdCommand::new(lux_bin())
+        .arg("--color")
+        .arg("never")
+        .arg(md.to_str().unwrap())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("failed to run lux");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "lux should exit successfully: {:?}", output.status);
+    assert!(stdout.contains("|---|---|"), "source must be untouched: {stdout}");
+    assert!(!stdout.contains('┌'), "no box drawing without color: {stdout}");
+}
+
+#[test]
+fn md_table_eof_mid_table_flushes() {
+    let dir = TempDir::new().unwrap();
+    let md = dir.path().join("t.md");
+    // File ends while still inside the table
+    std::fs::write(&md, "| a | b |\n|---|---|\n| 1 | 2 |\n").unwrap();
+    let output = StdCommand::new(lux_bin())
+        .arg("--color")
+        .arg("always")
+        .arg(md.to_str().unwrap())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("failed to run lux");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "lux should exit successfully: {:?}", output.status);
+    assert!(stdout.contains('└'), "table should render at EOF: {stdout}");
+}
+
+#[test]
+fn md_table_via_stdin_sniff() {
+    // Fenced code block makes the sniffer detect markdown.
+    let input = "```rust\nfn x() {}\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |\n";
+    let output = lux()
+        .arg("--color")
+        .arg("always")
+        .write_stdin(input)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains('┌'), "stdin markdown should box-draw: {stdout}");
+}
+
+#[test]
+fn non_md_file_tables_untouched() {
+    let dir = TempDir::new().unwrap();
+    let f = dir.path().join("t.log");
+    std::fs::write(&f, "| a | b |\n|---|---|\n| 1 | 2 |\n").unwrap();
+    let output = StdCommand::new(lux_bin())
+        .arg("--color")
+        .arg("always")
+        .arg(f.to_str().unwrap())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("failed to run lux");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "lux should exit successfully: {:?}", output.status);
+    assert!(!stdout.contains('┌'), "non-markdown must not box-draw: {stdout}");
+}

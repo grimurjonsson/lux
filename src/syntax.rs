@@ -130,6 +130,12 @@ impl SyntaxHighlighter {
         Self::with_syntax(syntax, theme_name)
     }
 
+    /// True when this highlighter is using the Markdown grammar — used to
+    /// activate markdown-specific rendering (tables).
+    pub fn is_markdown(&self) -> bool {
+        self.syntax.name == "Markdown"
+    }
+
     fn with_syntax(
         syntax: &'static SyntaxReference,
         theme_name: Option<&str>,
@@ -325,5 +331,13 @@ mod tests {
         assert!(names.contains(&"Rust"), "Expected Rust in syntaxes");
         assert!(names.contains(&"Python"), "Expected Python in syntaxes");
         assert!(names.contains(&"Go"), "Expected Go in syntaxes");
+    }
+
+    #[test]
+    fn is_markdown_for_md_file() {
+        let h = SyntaxHighlighter::for_file(Path::new("notes.md"), None, None).unwrap();
+        assert!(h.is_markdown());
+        let h = SyntaxHighlighter::for_file(Path::new("main.rs"), None, None).unwrap();
+        assert!(!h.is_markdown());
     }
 }
