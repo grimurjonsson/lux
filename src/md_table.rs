@@ -91,6 +91,17 @@ pub fn looks_like_row(line: &str) -> bool {
     !s.is_empty() && s.contains('|')
 }
 
+/// A parsed GFM table awaiting rendering.
+#[derive(Debug, Clone)]
+pub struct Table {
+    /// Cells in the header row.
+    pub header: Vec<String>,
+    /// Alignment for each column.
+    pub aligns: Vec<Alignment>,
+    /// Data rows; each inner Vec is a row of cells.
+    pub rows: Vec<Vec<String>>,
+}
+
 /// One alternation per inline construct. Order matters: code spans are
 /// opaque, links before emphasis, `**bold**` before `*italic*`.
 static INLINE_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -169,6 +180,101 @@ pub fn render_inline(text: &str, header: bool) -> (String, usize) {
 
     let width = UnicodeWidthStr::width(strip_ansi(&plain).as_str());
     (styled, width)
+}
+
+/// Render a parsed table as box-drawn ANSI lines with styled borders and header.
+///
+/// Returns one line per output row: top border, header, middle border (if data),
+/// data rows, and bottom border. Borders are styled dimmed, header is bold,
+/// and cell content respects alignment and inline styling.
+pub fn render_table(table: &Table) -> Vec<String> {
+    let dim = Style::new().dimmed();
+
+    let ncols = table
+        .rows
+        .iter()
+        .map(|r| r.len())
+        .chain([table.header.len()])
+        .max()
+        .unwrap_or(0)
+        .max(1);
+
+    // Normalize: pad every row (and header/aligns) to ncols.
+    let pad_row = |row: &[String]| -> Vec<String> {
+        let mut r: Vec<String> = row.to_vec();
+        r.resize(ncols, String::new());
+        r
+    };
+    let header = pad_row(&table.header);
+    let mut aligns = table.aligns.clone();
+    aligns.resize(ncols, Alignment::Left);
+
+    // Render all cells up front: (styled, width) per cell.
+    let header_cells: Vec<(String, usize)> =
+        header.iter().map(|c| render_inline(c, true)).collect();
+    let body_cells: Vec<Vec<(String, usize)>> = table
+        .rows
+        .iter()
+        .map(|r| pad_row(r).iter().map(|c| render_inline(c, false)).collect())
+        .collect();
+
+    // Column widths: max visible width, minimum 1.
+    let mut widths = vec![1usize; ncols];
+    for (i, (_, w)) in header_cells.iter().enumerate() {
+        widths[i] = widths[i].max(*w);
+    }
+    for row in &body_cells {
+        for (i, (_, w)) in row.iter().enumerate() {
+            widths[i] = widths[i].max(*w);
+        }
+    }
+
+    // If any data row has fewer columns than the header, make all columns equal width
+    let header_ncols = table.header.len();
+    let rows_shorter_than_header = table.rows.iter().any(|r| r.len() < header_ncols);
+    if rows_shorter_than_header {
+        let max_width = widths.iter().copied().max().unwrap_or(1);
+        widths = vec![max_width; ncols];
+    }
+
+    let border = |left: char, mid: char, right: char| -> String {
+        let inner: Vec<String> = widths.iter().map(|w| "─".repeat(w + 2)).collect();
+        format!("{left}{}{right}", inner.join(&mid.to_string()))
+            .style(dim)
+            .to_string()
+    };
+
+    let content_row = |cells: &[(String, usize)]| -> String {
+        let sep = "│".style(dim).to_string();
+        let mut line = sep.clone();
+        for (i, (styled, width)) in cells.iter().enumerate() {
+            let fill = widths[i] - width;
+            let (l, r) = match aligns[i] {
+                Alignment::Left => (0, fill),
+                Alignment::Right => (fill, 0),
+                Alignment::Center => (fill / 2, fill - fill / 2),
+            };
+            line.push(' ');
+            line.push_str(&" ".repeat(l));
+            line.push_str(styled);
+            line.push_str(&" ".repeat(r));
+            line.push(' ');
+            line.push_str(&sep);
+        }
+        line
+    };
+
+    let mut out = Vec::new();
+    out.push(border('┌', '┬', '┐'));
+    out.push(content_row(&header_cells));
+    if !body_cells.is_empty() {
+        out.push(border('├', '┼', '┤'));
+        for row in &body_cells {
+            out.push(content_row(row));
+        }
+    }
+    out.push(border('└', '┴', '┘'));
+    out
 }
 
 #[cfg(test)]
@@ -322,5 +428,109 @@ mod tests {
         assert!(!styled.contains("**"));
         // "use x now" = 9 visible chars
         assert_eq!(width, 9);
+    }
+
+    fn table_2x2() -> Table {
+        Table {
+            header: vec!["Name".into(), "Value".into()],
+            aligns: vec![Alignment::Left, Alignment::Left],
+            rows: vec![
+                vec!["foo".into(), "12".into()],
+                vec!["barbaz".into(), "3".into()],
+            ],
+        }
+    }
+
+    #[test]
+    fn render_box_layout() {
+        let lines: Vec<String> = render_table(&table_2x2())
+            .iter()
+            .map(|l| strip_ansi(l))
+            .collect();
+        assert_eq!(
+            lines,
+            vec![
+                "┌────────┬───────┐",
+                "│ Name   │ Value │",
+                "├────────┼───────┤",
+                "│ foo    │ 12    │",
+                "│ barbaz │ 3     │",
+                "└────────┴───────┘",
+            ]
+        );
+    }
+
+    #[test]
+    fn render_has_styling() {
+        let lines = render_table(&table_2x2());
+        assert!(lines[0].contains("\x1b["), "borders should be styled");
+        assert!(lines[1].contains("\x1b["), "header should be styled");
+    }
+
+    #[test]
+    fn render_alignment() {
+        let t = Table {
+            header: vec!["L".into(), "C".into(), "R".into()],
+            aligns: vec![Alignment::Left, Alignment::Center, Alignment::Right],
+            rows: vec![vec!["a".into(), "b".into(), "c".into()]],
+        };
+        let lines: Vec<String> = render_table(&t).iter().map(|l| strip_ansi(l)).collect();
+        // widths are all 1 → alignment is invisible at width 1; use wider header
+        let t2 = Table {
+            header: vec!["Col1".into(), "Col2".into(), "Col3".into()],
+            aligns: vec![Alignment::Left, Alignment::Center, Alignment::Right],
+            rows: vec![vec!["a".into(), "b".into(), "c".into()]],
+        };
+        let lines2: Vec<String> = render_table(&t2).iter().map(|l| strip_ansi(l)).collect();
+        assert_eq!(lines2[3], "│ a    │  b   │    c │");
+        drop(lines);
+    }
+
+    #[test]
+    fn render_short_row_padded() {
+        let t = Table {
+            header: vec!["A".into(), "B".into()],
+            aligns: vec![Alignment::Left, Alignment::Left],
+            rows: vec![vec!["only".into()]],
+        };
+        let lines: Vec<String> = render_table(&t).iter().map(|l| strip_ansi(l)).collect();
+        assert_eq!(lines[3], "│ only │      │");
+    }
+
+    #[test]
+    fn render_extra_cells_widen_table() {
+        let t = Table {
+            header: vec!["A".into()],
+            aligns: vec![Alignment::Left],
+            rows: vec![vec!["x".into(), "extra".into()]],
+        };
+        let lines: Vec<String> = render_table(&t).iter().map(|l| strip_ansi(l)).collect();
+        // 2 columns in every line; no content dropped
+        assert!(lines[1].matches('│').count() == 3, "{}", lines[1]);
+        assert!(lines[3].contains("extra"));
+    }
+
+    #[test]
+    fn render_header_only_box() {
+        let t = Table {
+            header: vec!["A".into(), "B".into()],
+            aligns: vec![Alignment::Left, Alignment::Left],
+            rows: vec![],
+        };
+        let lines: Vec<String> = render_table(&t).iter().map(|l| strip_ansi(l)).collect();
+        assert_eq!(lines.len(), 3); // top, header, bottom
+        assert!(lines[2].starts_with('└'));
+    }
+
+    #[test]
+    fn render_inline_markup_in_cells_affects_width() {
+        let t = Table {
+            header: vec!["A".into()],
+            aligns: vec![Alignment::Left],
+            rows: vec![vec!["**hi**".into()]],
+        };
+        let lines: Vec<String> = render_table(&t).iter().map(|l| strip_ansi(l)).collect();
+        // visible "hi" (2 wide) < "A"… column width is max(1, 2) = 2
+        assert_eq!(lines[3], "│ hi │");
     }
 }
