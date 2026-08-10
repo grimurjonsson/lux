@@ -1507,6 +1507,8 @@ fn non_md_file_tables_untouched() {
 
 #[test]
 fn md_table_follow_mode_renders_after_idle() {
+    use std::io::{BufRead as _, Read as _};
+
     let dir = TempDir::new().unwrap();
     let md = dir.path().join("t.md");
     std::fs::write(&md, "start\n").unwrap();
@@ -1521,8 +1523,24 @@ fn md_table_follow_mode_renders_after_idle() {
         .spawn()
         .unwrap();
 
-    // Append a complete table, then wait past the idle-flush window (250ms poll).
-    std::thread::sleep(Duration::from_millis(300));
+    // Synchronize on output instead of a fixed pre-append sleep: read until the
+    // initial "start" line appears. `read_initial` snapshots the file's initial
+    // lines *before* `print_lines_filtered` prints and flushes them, so once
+    // "start" reaches us, that snapshot is already finalized -- the table we
+    // append next cannot possibly be swept into it. Any box-drawing we see
+    // afterward must come from follow.rs's own read/flush path.
+    let mut stdout = std::io::BufReader::new(child.stdout.take().unwrap());
+    let mut before = String::new();
+    loop {
+        let mut line = String::new();
+        let n = stdout.read_line(&mut line).unwrap();
+        assert!(n > 0, "child exited before printing 'start': {before:?}");
+        before.push_str(&line);
+        if line.trim_end() == "start" {
+            break;
+        }
+    }
+
     {
         use std::io::Write as _;
         let mut f = std::fs::OpenOptions::new().append(true).open(&md).unwrap();
@@ -1530,12 +1548,16 @@ fn md_table_follow_mode_renders_after_idle() {
         writeln!(f, "|---|---|").unwrap();
         writeln!(f, "| 1 | 2 |").unwrap();
     }
+    // Wait comfortably past the 250ms follow-mode poll so the idle flush fires.
     std::thread::sleep(Duration::from_millis(800));
     child.kill().unwrap();
-    let output = child.wait_with_output().unwrap();
-    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    let mut after = String::new();
+    stdout.read_to_string(&mut after).unwrap();
+    let _ = child.wait();
+
     assert!(
-        stdout.contains('┌'),
-        "table should render after idle flush: {stdout}"
+        after.contains('┌'),
+        "table should render after idle flush: {after:?} (before marker: {before:?})"
     );
 }
