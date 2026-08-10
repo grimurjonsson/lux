@@ -238,7 +238,7 @@ pub struct TableAssembler {
 }
 
 /// True if the line's trimmed start opens or closes a fenced code block.
-fn is_fence_toggle(line: &str) -> bool {
+pub(crate) fn is_fence_toggle(line: &str) -> bool {
     let t = line.trim_start();
     t.starts_with("```") || t.starts_with("~~~")
 }
