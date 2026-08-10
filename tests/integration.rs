@@ -1403,3 +1403,288 @@ fn insert_template_with_colons() {
     let lines: Vec<&str> = stdout.lines().collect();
     assert_eq!(lines[0], "--- 12:34:56 ---");
 }
+
+// === Markdown table rendering integration tests ===
+
+#[test]
+fn md_table_box_drawn_with_color() {
+    let dir = TempDir::new().unwrap();
+    let md = dir.path().join("t.md");
+    std::fs::write(
+        &md,
+        "# Title\n\n| Name | Value |\n|------|-------|\n| foo | 12 |\n\nafter\n",
+    )
+    .unwrap();
+    let output = StdCommand::new(lux_bin())
+        .arg("--color")
+        .arg("always")
+        .arg(md.to_str().unwrap())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("failed to run lux");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "lux should exit successfully: {:?}", output.status);
+    assert!(stdout.contains('┌'), "expected box drawing in: {stdout}");
+    assert!(stdout.contains("│"), "expected box borders in: {stdout}");
+    assert!(!stdout.contains("|---"), "raw delimiter should be gone: {stdout}");
+    assert!(stdout.contains("after"), "trailing line preserved: {stdout}");
+}
+
+#[test]
+fn md_table_raw_when_color_never() {
+    let dir = TempDir::new().unwrap();
+    let md = dir.path().join("t.md");
+    std::fs::write(&md, "| a | b |\n|---|---|\n| 1 | 2 |\n").unwrap();
+    let output = StdCommand::new(lux_bin())
+        .arg("--color")
+        .arg("never")
+        .arg(md.to_str().unwrap())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("failed to run lux");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "lux should exit successfully: {:?}", output.status);
+    assert!(stdout.contains("|---|---|"), "source must be untouched: {stdout}");
+    assert!(!stdout.contains('┌'), "no box drawing without color: {stdout}");
+}
+
+#[test]
+fn md_table_eof_mid_table_flushes() {
+    let dir = TempDir::new().unwrap();
+    let md = dir.path().join("t.md");
+    // File ends while still inside the table
+    std::fs::write(&md, "| a | b |\n|---|---|\n| 1 | 2 |\n").unwrap();
+    let output = StdCommand::new(lux_bin())
+        .arg("--color")
+        .arg("always")
+        .arg(md.to_str().unwrap())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("failed to run lux");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "lux should exit successfully: {:?}", output.status);
+    assert!(stdout.contains('└'), "table should render at EOF: {stdout}");
+}
+
+#[test]
+fn md_table_via_stdin_sniff() {
+    // Fenced code block makes the sniffer detect markdown.
+    let input = "```rust\nfn x() {}\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |\n";
+    let output = lux()
+        .arg("--color")
+        .arg("always")
+        .write_stdin(input)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains('┌'), "stdin markdown should box-draw: {stdout}");
+}
+
+#[test]
+fn md_table_color_never_byte_identical_passthrough() {
+    // Locks in the passthrough guarantee: with color disabled, a markdown
+    // file containing a table must come back out byte-for-byte unchanged.
+    let dir = TempDir::new().unwrap();
+    let md = dir.path().join("t.md");
+    let content = "# Title\n\n| Name | Value |\n|------|-------|\n| foo | 12 |\n\nafter\n";
+    std::fs::write(&md, content).unwrap();
+    let output = StdCommand::new(lux_bin())
+        .arg("--color")
+        .arg("never")
+        .arg(md.to_str().unwrap())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("failed to run lux");
+    assert!(output.status.success(), "lux should exit successfully: {:?}", output.status);
+    assert_eq!(
+        output.stdout,
+        content.as_bytes(),
+        "stdout must be byte-identical to the source file: {:?}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+#[test]
+fn non_md_file_tables_untouched() {
+    let dir = TempDir::new().unwrap();
+    let f = dir.path().join("t.log");
+    std::fs::write(&f, "| a | b |\n|---|---|\n| 1 | 2 |\n").unwrap();
+    let output = StdCommand::new(lux_bin())
+        .arg("--color")
+        .arg("always")
+        .arg(f.to_str().unwrap())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("failed to run lux");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "lux should exit successfully: {:?}", output.status);
+    assert!(!stdout.contains('┌'), "non-markdown must not box-draw: {stdout}");
+}
+
+#[test]
+fn md_table_follow_mode_renders_after_idle() {
+    use std::io::{BufRead as _, Read as _};
+
+    let dir = TempDir::new().unwrap();
+    let md = dir.path().join("t.md");
+    std::fs::write(&md, "start\n").unwrap();
+
+    let mut child = StdCommand::new(assert_cmd::cargo::cargo_bin("lux"))
+        .arg("--color")
+        .arg("always")
+        .arg("-f")
+        .arg(md.to_str().unwrap())
+        .stdout(Stdio::piped())
+        .stdin(Stdio::null())
+        .spawn()
+        .unwrap();
+
+    // Synchronize on output instead of a fixed pre-append sleep: read until the
+    // initial "start" line appears. `read_initial` snapshots the file's initial
+    // lines *before* `print_lines_filtered` prints and flushes them, so once
+    // "start" reaches us, that snapshot is already finalized -- the table we
+    // append next cannot possibly be swept into it. Any box-drawing we see
+    // afterward must come from follow.rs's own read/flush path.
+    let mut stdout = std::io::BufReader::new(child.stdout.take().unwrap());
+    let mut before = String::new();
+    loop {
+        let mut line = String::new();
+        let n = stdout.read_line(&mut line).unwrap();
+        assert!(n > 0, "child exited before printing 'start': {before:?}");
+        before.push_str(&line);
+        if line.trim_end() == "start" {
+            break;
+        }
+    }
+
+    {
+        use std::io::Write as _;
+        let mut f = std::fs::OpenOptions::new().append(true).open(&md).unwrap();
+        writeln!(f, "| a | b |").unwrap();
+        writeln!(f, "|---|---|").unwrap();
+        writeln!(f, "| 1 | 2 |").unwrap();
+    }
+    // Wait comfortably past the 250ms follow-mode poll so the idle flush fires.
+    std::thread::sleep(Duration::from_millis(800));
+    child.kill().unwrap();
+
+    let mut after = String::new();
+    stdout.read_to_string(&mut after).unwrap();
+    let _ = child.wait();
+
+    assert!(
+        after.contains('┌'),
+        "table should render after idle flush: {after:?} (before marker: {before:?})"
+    );
+}
+
+// === --expand-refs cat-path integration tests ===
+
+#[test]
+fn expand_refs_expands_include() {
+    let dir = TempDir::new().unwrap();
+    std::fs::write(dir.path().join("child.md"), "child content\n").unwrap();
+    let root = dir.path().join("root.md");
+    std::fs::write(&root, "before\n@child.md\nafter\n").unwrap();
+    let output = StdCommand::new(lux_bin())
+        .args(["--color", "never", "--expand-refs", root.to_str().unwrap()])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("┌─ child.md "), "{stdout}");
+    assert!(stdout.contains("│ child content"), "{stdout}");
+    assert!(stdout.contains("└─"), "{stdout}");
+}
+
+#[test]
+fn expand_refs_off_is_passthrough() {
+    let dir = TempDir::new().unwrap();
+    std::fs::write(dir.path().join("child.md"), "child content\n").unwrap();
+    let root = dir.path().join("root.md");
+    let src = "before\n@child.md\nafter\n";
+    std::fs::write(&root, src).unwrap();
+    let output = StdCommand::new(lux_bin())
+        .args(["--color", "never", root.to_str().unwrap()])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&output.stdout), src);
+}
+
+#[test]
+fn expand_refs_missing_file_note_and_success() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().join("root.md");
+    std::fs::write(&root, "@gone.md\nafter\n").unwrap();
+    let output = StdCommand::new(lux_bin())
+        .args(["--color", "never", "--expand-refs", root.to_str().unwrap()])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "must not abort");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("not found"), "{stdout}");
+    assert!(stdout.contains("after"), "{stdout}");
+}
+
+#[test]
+fn expand_refs_stdin_warns_and_passes_through() {
+    let output = lux()
+        .arg("--color")
+        .arg("never")
+        .arg("--expand-refs")
+        .write_stdin("# Doc\n\n@child.md\n")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.contains("@child.md"), "unexpanded: {stdout}");
+    assert!(stderr.contains("--expand-refs"), "warning expected: {stderr}");
+}
+
+#[test]
+fn expand_refs_non_markdown_warns_and_views_normally() {
+    let dir = TempDir::new().unwrap();
+    let f = dir.path().join("app.log");
+    std::fs::write(&f, "line one\n@child.md\n").unwrap();
+    let output = StdCommand::new(lux_bin())
+        .args(["--color", "never", "--expand-refs", f.to_str().unwrap()])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.contains("@child.md"), "unexpanded: {stdout}");
+    assert!(stderr.contains("--expand-refs"), "warning expected: {stderr}");
+}
+
+#[test]
+fn expand_refs_nested_with_table_colored() {
+    let dir = TempDir::new().unwrap();
+    std::fs::write(dir.path().join("table.md"), "| a | b |\n|---|---|\n| 1 | 2 |\n").unwrap();
+    std::fs::write(dir.path().join("mid.md"), "mid\n@table.md\n").unwrap();
+    let root = dir.path().join("root.md");
+    std::fs::write(&root, "@mid.md\n").unwrap();
+    let output = StdCommand::new(lux_bin())
+        .args(["--color", "always", "--expand-refs", root.to_str().unwrap()])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("┬"), "boxed table inside nested include: {stdout}");
+    assert!(stdout.contains("\x1b["), "colored output: {stdout}");
+}

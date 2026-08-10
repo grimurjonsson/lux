@@ -10,6 +10,8 @@ use lux::config;
 use lux::engine::Engine;
 use lux::filter::LineFilter;
 use lux::follow;
+use lux::md_include::{render_root, IncludeCtx};
+use lux::md_table::{FeedResult, FlushResult, TableAssembler};
 use lux::output::detect_color_mode;
 use lux::rules::build_rules_with_config;
 use lux::slow::SlowLineAnnotator;
@@ -249,6 +251,8 @@ fn run() -> anyhow::Result<()> {
         }
     };
 
+    let is_markdown_syntax = syntax_highlighter.as_ref().is_some_and(|h| h.is_markdown());
+
     let mut engine = Engine::new(rules, color_mode.color_enabled(), syntax_highlighter);
 
     // Merge trigger settings: CLI flags override profile settings
@@ -307,6 +311,33 @@ fn run() -> anyhow::Result<()> {
             SlowLineAnnotator::new(threshold, slow_style_str, color_mode.color_enabled())
         });
 
+    // Markdown table rendering: active only for markdown content, with color,
+    // and without trigger/slow modes (multi-line buffering doesn't compose
+    // with context windows or per-line timing).
+    let mut table_assembler = if color_mode.color_enabled()
+        && !trigger_filter.is_active()
+        && slow_annotator.is_none()
+        && is_markdown_syntax
+    {
+        Some(TableAssembler::new())
+    } else {
+        None
+    };
+
+    // Include expansion: file view only, markdown only, incompatible with
+    // trigger/slow (same composition rule as table rendering).
+    let expand_refs_active = cli.expand_refs
+        && cli.file.is_some()
+        && is_markdown_syntax
+        && !trigger_filter.is_active()
+        && slow_annotator.is_none();
+    if cli.expand_refs && cli.file.is_none() {
+        eprintln!("lux: --expand-refs requires a file argument; ignoring");
+    }
+    if cli.expand_refs && cli.file.is_some() && !is_markdown_syntax {
+        eprintln!("lux: --expand-refs only applies to markdown files; viewing normally");
+    }
+
     let stdout_is_terminal = io::stdout().is_terminal();
     let stdout = io::stdout().lock();
     let mut writer = BufWriter::new(stdout);
@@ -350,48 +381,69 @@ fn run() -> anyhow::Result<()> {
                 .with_context(|| format!("cannot open '{file_path}'"))?;
             let lines = tail::read_from_line(&mut file, 1)?;
             let rule_count = engine.rule_count();
-            lux::pager::run(
-                path,
-                &mut engine,
-                &filter,
-                &mut trigger_filter,
-                active_profile_name.as_deref(),
-                rule_count,
-                &lines,
-            )?;
+            if expand_refs_active {
+                let ctx = IncludeCtx {
+                    color_enabled: color_mode.color_enabled(),
+                    filter: &filter,
+                };
+                let rendered = render_root(&lines, path, &mut engine, &ctx);
+                lux::pager::run_prerendered(path, active_profile_name.as_deref(), rule_count, &rendered)?;
+            } else {
+                lux::pager::run(
+                    path,
+                    &mut engine,
+                    &filter,
+                    &mut trigger_filter,
+                    active_profile_name.as_deref(),
+                    rule_count,
+                    &lines,
+                    table_assembler.as_mut(),
+                )?;
+            }
         } else if cli.follow_descriptor {
             // -f mode: file MUST exist
             let mut file = std::fs::File::open(path)
                 .with_context(|| format!("cannot open '{file_path}'"))?;
             let initial_lines = read_initial(&mut file, &line_spec)?;
-            print_lines_filtered(&initial_lines, &mut engine, &mut writer, &mut trigger_filter, &filter)?;
+            print_lines_filtered(&initial_lines, &mut engine, &mut writer, &mut trigger_filter, &filter, table_assembler.as_mut())?;
             let trigger_opt = if trigger_filter.is_active() {
                 Some(trigger_filter)
             } else {
                 None
             };
             let filter_opt = if filter.is_active() { Some(&filter) } else { None };
-            follow::run(path, follow::FollowMode::Descriptor, file, &mut engine, &mut writer, trigger_opt, filter_opt, slow_annotator)?;
+            follow::run(path, follow::FollowMode::Descriptor, file, &mut engine, &mut writer, trigger_opt, filter_opt, slow_annotator, table_assembler.as_mut())?;
         } else if is_print_and_exit {
             // Print-and-exit: file + explicit -n + no follow flag
             let mut file = std::fs::File::open(path)
                 .with_context(|| format!("cannot open '{file_path}'"))?;
             let initial_lines = read_initial(&mut file, &line_spec)?;
-            print_lines_filtered(&initial_lines, &mut engine, &mut writer, &mut trigger_filter, &filter)?;
+            if expand_refs_active {
+                let ctx = IncludeCtx {
+                    color_enabled: color_mode.color_enabled(),
+                    filter: &filter,
+                };
+                for l in render_root(&initial_lines, path, &mut engine, &ctx) {
+                    writeln!(writer, "{l}")?;
+                }
+                writer.flush()?;
+            } else {
+                print_lines_filtered(&initial_lines, &mut engine, &mut writer, &mut trigger_filter, &filter, table_assembler.as_mut())?;
+            }
             // Done -- return without following
         } else {
             // -F: follow by name, file may not exist yet
             match std::fs::File::open(path) {
                 Ok(mut file) => {
                     let initial_lines = read_initial(&mut file, &line_spec)?;
-                    print_lines_filtered(&initial_lines, &mut engine, &mut writer, &mut trigger_filter, &filter)?;
+                    print_lines_filtered(&initial_lines, &mut engine, &mut writer, &mut trigger_filter, &filter, table_assembler.as_mut())?;
                     let trigger_opt = if trigger_filter.is_active() {
                         Some(trigger_filter)
                     } else {
                         None
                     };
                     let filter_opt = if filter.is_active() { Some(&filter) } else { None };
-                    follow::run(path, follow::FollowMode::Name, file, &mut engine, &mut writer, trigger_opt, filter_opt, slow_annotator)?;
+                    follow::run(path, follow::FollowMode::Name, file, &mut engine, &mut writer, trigger_opt, filter_opt, slow_annotator, table_assembler.as_mut())?;
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                     eprintln!(
@@ -404,7 +456,7 @@ fn run() -> anyhow::Result<()> {
                         None
                     };
                     let filter_opt = if filter.is_active() { Some(&filter) } else { None };
-                    follow::run_waiting(path, &mut engine, &mut writer, trigger_opt, filter_opt, slow_annotator)?;
+                    follow::run_waiting(path, &mut engine, &mut writer, trigger_opt, filter_opt, slow_annotator, table_assembler.as_mut())?;
                 }
                 Err(e) => return Err(e).with_context(|| format!("cannot open '{file_path}'")),
             }
@@ -458,19 +510,45 @@ fn run() -> anyhow::Result<()> {
                 if filter.is_active() && !filter.should_show(&line) {
                     continue;
                 }
-                let result = engine.apply(&line);
-                for l in &result.before {
-                    writeln!(writer, "{l}")?;
-                }
-                if let Some(ref mut ann) = slow_annotator {
-                    if let Some(prev) = ann.annotate(&result.line) {
-                        writeln!(writer, "{prev}")?;
+                match table_assembler.as_mut() {
+                    None => {
+                        let result = engine.apply(&line);
+                        for l in &result.before {
+                            writeln!(writer, "{l}")?;
+                        }
+                        if let Some(ref mut ann) = slow_annotator {
+                            if let Some(prev) = ann.annotate(&result.line) {
+                                writeln!(writer, "{prev}")?;
+                            }
+                        } else {
+                            writeln!(writer, "{}", result.line)?;
+                        }
+                        for l in &result.after {
+                            writeln!(writer, "{l}")?;
+                        }
                     }
-                } else {
-                    writeln!(writer, "{}", result.line)?;
-                }
-                for l in &result.after {
-                    writeln!(writer, "{l}")?;
+                    Some(t) => match t.feed(&line) {
+                        FeedResult::Pass(raw_lines) => {
+                            for raw in raw_lines {
+                                let result = engine.apply(&raw);
+                                for l in result.flatten() {
+                                    writeln!(writer, "{l}")?;
+                                }
+                            }
+                        }
+                        FeedResult::Buffered => {}
+                        FeedResult::Table { rendered, trailing } => {
+                            for l in rendered {
+                                writeln!(writer, "{l}")?;
+                            }
+                            if let Some(raw) = trailing {
+                                let result = engine.apply(&raw);
+                                for l in result.flatten() {
+                                    writeln!(writer, "{l}")?;
+                                }
+                            }
+                        }
+                    },
                 }
                 if stdout_is_terminal {
                     writer.flush()?;
@@ -481,6 +559,23 @@ fn run() -> anyhow::Result<()> {
         if let Some(ref mut ann) = slow_annotator {
             if let Some(last) = ann.flush() {
                 writeln!(writer, "{last}")?;
+            }
+        }
+        // Flush any pending table state at EOF.
+        if let Some(ref mut t) = table_assembler {
+            match t.flush() {
+                FlushResult::Nothing => {}
+                FlushResult::Raw(raw) => {
+                    let result = engine.apply(&raw);
+                    for l in result.flatten() {
+                        writeln!(writer, "{l}")?;
+                    }
+                }
+                FlushResult::Table(rendered) => {
+                    for l in rendered {
+                        writeln!(writer, "{l}")?;
+                    }
+                }
             }
         }
     }
@@ -519,6 +614,7 @@ fn print_lines_filtered(
     writer: &mut BufWriter<impl Write>,
     trigger: &mut TriggerFilter,
     filter: &LineFilter,
+    mut table: Option<&mut TableAssembler>,
 ) -> anyhow::Result<()> {
     if trigger.is_active() {
         for line in lines {
@@ -545,9 +641,52 @@ fn print_lines_filtered(
             if filter.is_active() && !filter.should_show(line) {
                 continue;
             }
-            let result = engine.apply(line);
-            for l in result.flatten() {
-                writeln!(writer, "{l}")?;
+            match table.as_deref_mut() {
+                None => {
+                    let result = engine.apply(line);
+                    for l in result.flatten() {
+                        writeln!(writer, "{l}")?;
+                    }
+                }
+                Some(t) => match t.feed(line) {
+                    FeedResult::Pass(raw_lines) => {
+                        for raw in raw_lines {
+                            let result = engine.apply(&raw);
+                            for l in result.flatten() {
+                                writeln!(writer, "{l}")?;
+                            }
+                        }
+                    }
+                    FeedResult::Buffered => {}
+                    FeedResult::Table { rendered, trailing } => {
+                        for l in rendered {
+                            writeln!(writer, "{l}")?;
+                        }
+                        if let Some(raw) = trailing {
+                            let result = engine.apply(&raw);
+                            for l in result.flatten() {
+                                writeln!(writer, "{l}")?;
+                            }
+                        }
+                    }
+                },
+            }
+        }
+        // EOF for this batch: flush any pending table state.
+        if let Some(t) = table {
+            match t.flush() {
+                FlushResult::Nothing => {}
+                FlushResult::Raw(raw) => {
+                    let result = engine.apply(&raw);
+                    for l in result.flatten() {
+                        writeln!(writer, "{l}")?;
+                    }
+                }
+                FlushResult::Table(rendered) => {
+                    for l in rendered {
+                        writeln!(writer, "{l}")?;
+                    }
+                }
             }
         }
     }

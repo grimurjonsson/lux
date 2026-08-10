@@ -14,6 +14,7 @@ use ratatui::Terminal;
 
 use crate::engine::Engine;
 use crate::filter::LineFilter;
+use crate::md_table::{FeedResult, FlushResult, TableAssembler};
 use crate::trigger::{OutputDecision, TriggerFilter};
 
 /// Drop guard that ensures terminal state is restored even on panic.
@@ -30,6 +31,7 @@ impl Drop for TerminalGuard {
 ///
 /// `raw_lines` should contain the full file content (all lines).
 /// Lines are filtered, colorized, and displayed interactively.
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     file_path: &Path,
     engine: &mut Engine,
@@ -38,21 +40,39 @@ pub fn run(
     profile_name: Option<&str>,
     rule_count: usize,
     raw_lines: &[String],
+    table: Option<&mut TableAssembler>,
 ) -> Result<()> {
     // Apply filter + engine + trigger to produce colorized ANSI lines
-    let colored_lines = colorize_lines(raw_lines, engine, filter, trigger);
+    let colored_lines = colorize_lines(raw_lines, engine, filter, trigger, table);
+    let tui_lines = to_tui_lines(&colored_lines);
+    display(file_path, profile_name, rule_count, tui_lines)
+}
 
-    // Convert ANSI strings to ratatui Lines using ansi-to-tui
-    let tui_lines: Vec<Line<'static>> = colored_lines
+/// Pager over lines that are already fully styled (include expansion).
+pub fn run_prerendered(
+    file_path: &Path,
+    profile_name: Option<&str>,
+    rule_count: usize,
+    colored_lines: &[String],
+) -> Result<()> {
+    display(file_path, profile_name, rule_count, to_tui_lines(colored_lines))
+}
+
+/// Convert ANSI-styled strings to ratatui lines for display.
+fn to_tui_lines(colored_lines: &[String]) -> Vec<Line<'static>> {
+    colored_lines
         .iter()
-        .flat_map(|s| {
-            s.as_bytes()
-                .into_text()
-                .unwrap_or_default()
-                .lines
-        })
-        .collect();
+        .flat_map(|s| s.as_bytes().into_text().unwrap_or_default().lines)
+        .collect()
+}
 
+/// Set up the terminal and run the event loop over pre-converted lines.
+fn display(
+    file_path: &Path,
+    profile_name: Option<&str>,
+    rule_count: usize,
+    tui_lines: Vec<Line<'static>>,
+) -> Result<()> {
     if tui_lines.is_empty() {
         return Ok(());
     }
@@ -85,6 +105,7 @@ fn colorize_lines(
     engine: &mut Engine,
     filter: &LineFilter,
     trigger: &mut TriggerFilter,
+    mut table: Option<&mut TableAssembler>,
 ) -> Vec<String> {
     let mut result = Vec::new();
 
@@ -105,7 +126,30 @@ fn colorize_lines(
             if filter.is_active() && !filter.should_show(line) {
                 continue;
             }
-            result.extend(engine.apply(line).flatten());
+            match table.as_deref_mut() {
+                None => result.extend(engine.apply(line).flatten()),
+                Some(t) => match t.feed(line) {
+                    FeedResult::Pass(raw) => {
+                        for r in raw {
+                            result.extend(engine.apply(&r).flatten());
+                        }
+                    }
+                    FeedResult::Buffered => {}
+                    FeedResult::Table { rendered, trailing } => {
+                        result.extend(rendered);
+                        if let Some(r) = trailing {
+                            result.extend(engine.apply(&r).flatten());
+                        }
+                    }
+                },
+            }
+        }
+        if let Some(t) = table {
+            match t.flush() {
+                FlushResult::Nothing => {}
+                FlushResult::Raw(r) => result.extend(engine.apply(&r).flatten()),
+                FlushResult::Table(rendered) => result.extend(rendered),
+            }
         }
     }
 
@@ -233,4 +277,42 @@ fn event_loop(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::md_table::TableAssembler;
+
+    #[test]
+    fn to_tui_lines_preserves_line_count_and_text() {
+        let lines = vec![
+            "plain".to_string(),
+            "\x1b[31mred\x1b[0m".to_string(),
+            "│ gutter".to_string(),
+        ];
+        let tui = to_tui_lines(&lines);
+        assert_eq!(tui.len(), 3);
+        let texts: Vec<String> = tui
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        assert_eq!(texts, vec!["plain", "red", "│ gutter"]);
+    }
+
+    #[test]
+    fn colorize_lines_renders_tables() {
+        let mut engine = Engine::new(vec![], true, None);
+        let filter = LineFilter::new(&[], &[], true).unwrap();
+        let mut trigger = TriggerFilter::new(&[], "20", "20", true).unwrap();
+        let lines: Vec<String> = vec![
+            "| a | b |".into(),
+            "|---|---|".into(),
+            "| 1 | 2 |".into(),
+        ];
+        let mut table = TableAssembler::new();
+        let out = colorize_lines(&lines, &mut engine, &filter, &mut trigger, Some(&mut table));
+        let joined = out.join("\n");
+        assert!(joined.contains('┌'), "pager should box-draw tables: {joined}");
+    }
 }
