@@ -92,6 +92,9 @@ lux config default-file-mode less   # use pager
 lux config default-file-mode cat    # print-and-exit (default)
 ```
 
+Markdown files get an extra touch: GFM tables are rendered as aligned
+box-drawn tables (only when color is on — piped output keeps the raw source).
+
 ### Syntax highlighting
 
 Open code and config files with automatic syntax coloring (powered by [syntect](https://github.com/trishume/syntect) with Catppuccin Mocha theme):

@@ -14,6 +14,7 @@ use ratatui::Terminal;
 
 use crate::engine::Engine;
 use crate::filter::LineFilter;
+use crate::md_table::{FeedResult, FlushResult, TableAssembler};
 use crate::trigger::{OutputDecision, TriggerFilter};
 
 /// Drop guard that ensures terminal state is restored even on panic.
@@ -38,9 +39,10 @@ pub fn run(
     profile_name: Option<&str>,
     rule_count: usize,
     raw_lines: &[String],
+    table: Option<&mut TableAssembler>,
 ) -> Result<()> {
     // Apply filter + engine + trigger to produce colorized ANSI lines
-    let colored_lines = colorize_lines(raw_lines, engine, filter, trigger);
+    let colored_lines = colorize_lines(raw_lines, engine, filter, trigger, table);
 
     // Convert ANSI strings to ratatui Lines using ansi-to-tui
     let tui_lines: Vec<Line<'static>> = colored_lines
@@ -85,6 +87,7 @@ fn colorize_lines(
     engine: &mut Engine,
     filter: &LineFilter,
     trigger: &mut TriggerFilter,
+    mut table: Option<&mut TableAssembler>,
 ) -> Vec<String> {
     let mut result = Vec::new();
 
@@ -105,7 +108,30 @@ fn colorize_lines(
             if filter.is_active() && !filter.should_show(line) {
                 continue;
             }
-            result.extend(engine.apply(line).flatten());
+            match table.as_deref_mut() {
+                None => result.extend(engine.apply(line).flatten()),
+                Some(t) => match t.feed(line) {
+                    FeedResult::Pass(raw) => {
+                        for r in raw {
+                            result.extend(engine.apply(&r).flatten());
+                        }
+                    }
+                    FeedResult::Buffered => {}
+                    FeedResult::Table { rendered, trailing } => {
+                        result.extend(rendered);
+                        if let Some(r) = trailing {
+                            result.extend(engine.apply(&r).flatten());
+                        }
+                    }
+                },
+            }
+        }
+        if let Some(t) = table.as_deref_mut() {
+            match t.flush() {
+                FlushResult::Nothing => {}
+                FlushResult::Raw(r) => result.extend(engine.apply(&r).flatten()),
+                FlushResult::Table(rendered) => result.extend(rendered),
+            }
         }
     }
 
@@ -233,4 +259,26 @@ fn event_loop(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::md_table::TableAssembler;
+
+    #[test]
+    fn colorize_lines_renders_tables() {
+        let mut engine = Engine::new(vec![], true, None);
+        let filter = LineFilter::new(&[], &[], true).unwrap();
+        let mut trigger = TriggerFilter::new(&[], "20", "20", true).unwrap();
+        let lines: Vec<String> = vec![
+            "| a | b |".into(),
+            "|---|---|".into(),
+            "| 1 | 2 |".into(),
+        ];
+        let mut table = TableAssembler::new();
+        let out = colorize_lines(&lines, &mut engine, &filter, &mut trigger, Some(&mut table));
+        let joined = out.join("\n");
+        assert!(joined.contains('┌'), "pager should box-draw tables: {joined}");
+    }
 }

@@ -374,6 +374,7 @@ fn run() -> anyhow::Result<()> {
                 active_profile_name.as_deref(),
                 rule_count,
                 &lines,
+                table_assembler.as_mut(),
             )?;
         } else if cli.follow_descriptor {
             // -f mode: file MUST exist

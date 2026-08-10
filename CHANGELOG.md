@@ -5,6 +5,14 @@ All notable changes to lux will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Markdown tables render as aligned unicode box-drawn tables when viewing
+  markdown content (file view, pager, stdin, and follow modes). Inline
+  markdown in cells (bold, italic, code, links, strikethrough) is styled.
+  Raw source is preserved when color is off or output is piped.
+
 ## [0.1.14] - 2026-04-22
 Fixed ANSI preservation in pipe mode so external colors survive when lux rules don't claim them. Added markdown auto-detection on stdin and extended the `help` profile so `just --list`-style output gets styled out of the box.
 
