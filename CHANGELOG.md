@@ -5,6 +5,39 @@ All notable changes to lux will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.15] - 2026-08-10
+Lux now renders GFM markdown tables as styled unicode boxes with inline formatting across all modes, expands @file.md includes via a new --expand-refs flag, and adds local profiles, `lux profile show`, text insertion rules, and a `next` scope for coloring lines after a match.
+
+### Added
+- expand includes in pager mode; document --expand-refs
+- expand @file.md includes in file view with --expand-refs
+- recursive include renderer with cycle/depth/missing safety
+- add include-ref detection and gutter frame builders
+- add --expand-refs flag
+- box-draw markdown tables in pager mode; document feature
+- box-draw markdown tables in follow mode with idle flush
+- box-draw markdown tables in file view and stdin modes
+- add TableAssembler streaming state machine
+- render parsed tables as styled unicode boxes
+- render inline markdown (bold/italic/code/links/strike) in table cells
+- add GFM table cell splitting and delimiter detection
+- add text insertion rules (insert-before/after, prepend, append) (#13)
+- add next scope to color N lines after a trigger match
+- lux profile show profile_name added
+- improve the README.md
+
+### Fixed
+- unicode-aware frame padding, clippy nit, flush-before-ref test
+- skip table detection inside fenced code blocks
+- reject intraword and whitespace-flanked emphasis in table cells
+- per-column table widths, drop global equalize
+
+### Other
+- chore: clippy/doc/test cleanup for md-table review findings
+- test: deterministically cover follow-mode idle table flush
+- docs: add local profiles section to README
+- local profiles
+
 ## [Unreleased]
 
 ### Added

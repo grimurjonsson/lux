@@ -429,6 +429,11 @@ Options:
   -F
           Follow file by name (reopen on rename/truncate/recreate)
 
+      --expand-refs
+          Expand own-line @file.md references inline when viewing markdown
+          
+          [alias: --expand-referenced-files]
+
       --less
           Open file in interactive pager mode (like less)
 
