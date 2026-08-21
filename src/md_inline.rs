@@ -131,6 +131,97 @@ fn emoji_width() -> EmojiWidth {
     })
 }
 
+/// Extract the column from a cursor position report (`ESC[row;colR`).
+fn parse_cpr_column(buf: &[u8]) -> Option<usize> {
+    let s = String::from_utf8_lossy(buf);
+    let start = s.rfind("\x1b[")?;
+    let rest = &s[start + 2..];
+    let end = rest.find('R')?;
+    let (row, col) = rest[..end].split_once(';')?;
+    row.parse::<usize>().ok()?;
+    col.parse().ok()
+}
+
+/// Map a measured cursor advance for `❤️` to an emoji width mode. Advances
+/// other than 1 or 2 mean the probe misfired; fall back to detection.
+fn emoji_width_from_advance(advance: usize) -> Option<EmojiWidth> {
+    match advance {
+        1 => Some(EmojiWidth::Narrow),
+        2 => Some(EmojiWidth::Wide),
+        _ => None,
+    }
+}
+
+/// Measure how many cells this terminal actually advances for `❤️` by
+/// printing it at column 1, querying the cursor position (`ESC[6n`), and
+/// erasing the line. Returns `None` when there is no controlling tty or the
+/// terminal does not answer within ~200ms per read.
+#[cfg(unix)]
+fn probe_emoji_advance() -> Option<usize> {
+    use std::io::{Read, Write};
+    use std::os::fd::AsRawFd;
+
+    let mut tty = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/tty")
+        .ok()?;
+    let fd = tty.as_raw_fd();
+
+    // Raw-ish mode: no echo, no line buffering; reads time out after 200ms.
+    let mut saved: libc::termios = unsafe { std::mem::zeroed() };
+    if unsafe { libc::tcgetattr(fd, &mut saved) } != 0 {
+        return None;
+    }
+    let mut raw = saved;
+    raw.c_lflag &= !(libc::ICANON | libc::ECHO);
+    raw.c_cc[libc::VMIN] = 0;
+    raw.c_cc[libc::VTIME] = 2;
+    if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &raw) } != 0 {
+        return None;
+    }
+
+    let result = (|| {
+        tty.write_all(b"\r\x1b[K\xe2\x9d\xa4\xef\xb8\x8f\x1b[6n").ok()?;
+        tty.flush().ok()?;
+        let mut buf = Vec::with_capacity(16);
+        let mut byte = [0u8; 1];
+        for _ in 0..32 {
+            match tty.read(&mut byte) {
+                Ok(1) => {
+                    buf.push(byte[0]);
+                    if byte[0] == b'R' {
+                        break;
+                    }
+                }
+                _ => break, // timeout or error
+            }
+        }
+        parse_cpr_column(&buf).map(|col| col.saturating_sub(1))
+    })();
+
+    unsafe { libc::tcsetattr(fd, libc::TCSANOW, &saved) };
+    let _ = tty.write_all(b"\r\x1b[K");
+    result
+}
+
+#[cfg(not(unix))]
+fn probe_emoji_advance() -> Option<usize> {
+    None
+}
+
+/// Probe the terminal for its actual emoji advance and pin the mode from the
+/// result. No-op when the mode is already pinned (config) or the probe fails
+/// (no tty, no reply) — env-based detection then applies lazily.
+pub fn probe_and_set_emoji_width() {
+    if EMOJI_WIDTH.get().is_some() {
+        return;
+    }
+    if let Some(mode) = probe_emoji_advance().and_then(emoji_width_from_advance) {
+        set_emoji_width(mode);
+    }
+}
+
 /// Width of ANSI-free text under a given emoji width mode. `Wide` uses
 /// unicode-width's string measure (emoji presentation sequences count 2);
 /// `Narrow` sums per-char widths, so VS16 adds nothing.
@@ -703,6 +794,27 @@ mod tests {
         assert_eq!(detect_emoji_width_from(None, Some("xterm-kitty")), EmojiWidth::Wide);
         assert_eq!(detect_emoji_width_from(Some("iTerm.app"), Some("xterm-256color")), EmojiWidth::Narrow);
         assert_eq!(detect_emoji_width_from(None, None), EmojiWidth::Narrow);
+    }
+
+    #[test]
+    fn cpr_parse_extracts_column() {
+        // Terminal replies to ESC[6n with ESC[row;colR. Probe prints the
+        // heart at column 1, so col-1 is the cursor advance.
+        assert_eq!(parse_cpr_column(b"\x1b[12;3R"), Some(3));
+        assert_eq!(parse_cpr_column(b"\x1b[1;2R"), Some(2));
+        assert_eq!(parse_cpr_column(b"\x1b[999;100R"), Some(100));
+        assert_eq!(parse_cpr_column(b"garbage"), None);
+        assert_eq!(parse_cpr_column(b"\x1b[12R"), None);
+        assert_eq!(parse_cpr_column(b""), None);
+    }
+
+    #[test]
+    fn emoji_width_from_advance_maps_modes() {
+        assert_eq!(emoji_width_from_advance(1), Some(EmojiWidth::Narrow));
+        assert_eq!(emoji_width_from_advance(2), Some(EmojiWidth::Wide));
+        // Nonsense advances (0, 3+) mean the probe failed: fall back.
+        assert_eq!(emoji_width_from_advance(0), None);
+        assert_eq!(emoji_width_from_advance(5), None);
     }
 
     #[test]
