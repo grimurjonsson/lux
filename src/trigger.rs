@@ -292,21 +292,39 @@ impl TriggerFilter {
     }
 }
 
-/// Strip ANSI escape codes from a string for pattern matching.
+/// Strip ANSI escape codes from a string for pattern matching. Handles SGR
+/// (`ESC [ ... m`) and OSC sequences such as OSC 8 hyperlinks
+/// (`ESC ] ... BEL` or `ESC ] ... ESC \`).
 pub(crate) fn strip_ansi(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {
-        if c == '\x1b' {
-            // Skip until 'm' (end of SGR sequence)
-            while let Some(&next) = chars.peek() {
-                chars.next();
-                if next == 'm' {
-                    break;
+        if c != '\x1b' {
+            result.push(c);
+            continue;
+        }
+        match chars.peek() {
+            // OSC: skip until BEL or ST (ESC \).
+            Some(']') => {
+                while let Some(next) = chars.next() {
+                    if next == '\x07' {
+                        break;
+                    }
+                    if next == '\x1b' && chars.peek() == Some(&'\\') {
+                        chars.next();
+                        break;
+                    }
                 }
             }
-        } else {
-            result.push(c);
+            // CSI and anything else: skip until 'm' (end of SGR sequence).
+            _ => {
+                while let Some(&next) = chars.peek() {
+                    chars.next();
+                    if next == 'm' {
+                        break;
+                    }
+                }
+            }
         }
     }
     result
@@ -608,6 +626,25 @@ mod tests {
         assert_eq!(strip_ansi("\x1b[31mhello\x1b[0m"), "hello");
         assert_eq!(strip_ansi("no codes"), "no codes");
         assert_eq!(strip_ansi("\x1b[1;32mtest\x1b[0m rest"), "test rest");
+    }
+
+    #[test]
+    fn strip_ansi_removes_osc8_hyperlinks() {
+        // OSC 8 with ST (ESC \) terminator.
+        assert_eq!(
+            strip_ansi("\x1b]8;;https://x.io\x1b\\docs\x1b]8;;\x1b\\"),
+            "docs"
+        );
+        // OSC 8 with BEL terminator.
+        assert_eq!(
+            strip_ansi("\x1b]8;;https://x.io\x07docs\x1b]8;;\x07"),
+            "docs"
+        );
+        // Mixed with SGR styling inside the link text.
+        assert_eq!(
+            strip_ansi("\x1b]8;;https://x.io\x1b\\\x1b[34mdocs\x1b[0m\x1b]8;;\x1b\\ end"),
+            "docs end"
+        );
     }
 
     #[test]

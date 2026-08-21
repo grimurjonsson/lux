@@ -308,13 +308,28 @@ fn strip_ansi_with_map(raw: &str) -> (String, Vec<usize>) {
     let mut i = 0usize;
     while i < bytes.len() {
         if bytes[i] == 0x1b {
-            // Match the existing strip_ansi semantics: skip through the next 'm'.
+            // Match the strip_ansi semantics: OSC sequences (ESC ]) run to
+            // BEL or ST (ESC \); everything else skips through the next 'm'.
             i += 1;
-            while i < bytes.len() {
-                let b = bytes[i];
-                i += 1;
-                if b == b'm' {
-                    break;
+            if bytes.get(i) == Some(&b']') {
+                while i < bytes.len() {
+                    let b = bytes[i];
+                    i += 1;
+                    if b == 0x07 {
+                        break;
+                    }
+                    if b == 0x1b && bytes.get(i) == Some(&b'\\') {
+                        i += 1;
+                        break;
+                    }
+                }
+            } else {
+                while i < bytes.len() {
+                    let b = bytes[i];
+                    i += 1;
+                    if b == b'm' {
+                        break;
+                    }
                 }
             }
         } else {
@@ -895,6 +910,19 @@ mod tests {
     }
 
     // === Internal helpers ===
+
+    #[test]
+    fn test_strip_ansi_with_map_osc8_hyperlink() {
+        let raw = "\x1b]8;;https://x.io\x1b\\docs\x1b]8;;\x1b\\ end";
+        let (clean, map) = strip_ansi_with_map(raw);
+        assert_eq!(clean, "docs end");
+        // Mapped positions point at the original bytes of the clean chars.
+        let d = map[0];
+        assert_eq!(&raw[d..d + 4], "docs");
+        let raw_bel = "\x1b]8;;https://x.io\x07docs\x1b]8;;\x07 end";
+        let (clean, _) = strip_ansi_with_map(raw_bel);
+        assert_eq!(clean, "docs end");
+    }
 
     #[test]
     fn test_strip_ansi_with_map_basic() {

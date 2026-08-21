@@ -226,6 +226,22 @@ fn run() -> anyhow::Result<()> {
         Some(&merged_profiles),
     )?;
 
+    // Emoji width: config override, otherwise auto-detected from the
+    // terminal ($TERM_PROGRAM / $TERM) on first use.
+    match config
+        .as_ref()
+        .and_then(|(c, _)| c.emoji_width.as_deref())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("narrow") => lux::md_inline::set_emoji_width(lux::md_inline::EmojiWidth::Narrow),
+        Some("wide") => lux::md_inline::set_emoji_width(lux::md_inline::EmojiWidth::Wide),
+        Some(other) => eprintln!(
+            "lux: ignoring invalid emoji_width {other:?} in config (expected \"narrow\" or \"wide\")"
+        ),
+        None => {}
+    }
+
     // Create syntect highlighter:
     // - File mode: resolve by path (extension, filename, syntax_map).
     // - Stdin mode: sniff content (currently detects Markdown).

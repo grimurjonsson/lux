@@ -1,12 +1,8 @@
 //! GFM table detection and box-drawn rendering for markdown content.
 
-use std::sync::LazyLock;
-
 use owo_colors::{OwoColorize, Style};
-use regex::Regex;
-use unicode_width::UnicodeWidthStr;
 
-use crate::trigger::strip_ansi;
+use crate::md_inline::{inline_segments, render_markdown_line, visible, wrap_cell, Seg};
 
 /// Column alignment parsed from a delimiter row (`:--`, `:-:`, `--:`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,129 +98,27 @@ pub struct Table {
     pub rows: Vec<Vec<String>>,
 }
 
-/// One alternation per inline construct. Order matters: code spans are
-/// opaque, links before emphasis, `**bold**` before `*italic*`.
-static INLINE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(concat!(
-        r"(?P<code>`[^`]+`)",
-        r"|(?P<link>\[(?P<ltext>[^\]]*)\]\([^)]*\))",
-        r"|(?P<bold>\*\*(?P<btext>[^*]+)\*\*)",
-        r"|(?P<bold2>__(?P<b2text>[^_]+)__)",
-        r"|(?P<strike>~~(?P<stext>[^~]+)~~)",
-        r"|(?P<italic>\*(?P<itext>[^*]+)\*)",
-        r"|(?P<italic2>_(?P<i2text>[^_]+)_)",
-    ))
-    .unwrap()
-});
-
-fn base_style(header: bool) -> Style {
-    if header {
-        Style::new().bold()
-    } else {
-        Style::new()
+/// Shrink columns to make the full box fit within `max_width`. The widest
+/// column is shaved first, one character at a time, until the table fits or
+/// every column has reached its floor (3 columns, or its natural width if
+/// smaller). If the floors still don't fit, the table overflows.
+fn fit_widths(natural: &[usize], max_width: usize) -> Vec<usize> {
+    let n = natural.len();
+    // Per column: two padding spaces plus one border, plus the final border.
+    let chrome = 3 * n + 1;
+    let available = max_width.saturating_sub(chrome);
+    let mut widths = natural.to_vec();
+    let floors: Vec<usize> = natural.iter().map(|&w| w.min(3)).collect();
+    while widths.iter().sum::<usize>() > available {
+        let widest = (0..n)
+            .filter(|&i| widths[i] > floors[i])
+            .max_by_key(|&i| (widths[i], std::cmp::Reverse(i)));
+        match widest {
+            Some(i) => widths[i] -= 1,
+            None => break,
+        }
     }
-}
-
-/// True if `c` counts as a "word" character for emphasis-flanking checks:
-/// letters, digits, and underscore.
-fn is_word_char(c: char) -> bool {
-    c.is_alphanumeric() || c == '_'
-}
-
-/// GFM-inspired flanking check for `_`/`__` emphasis: an underscore
-/// delimiter must not be used intraword. Requires an explicit non-word
-/// character immediately outside both delimiters -- a bare string edge does
-/// not count, since a leading/trailing `_`/`__` in cell content is more
-/// often part of a larger identifier (e.g. `__init__`) than intentional
-/// emphasis.
-fn underscore_flanks_ok(text: &str, start: usize, end: usize) -> bool {
-    let before_ok = text[..start].chars().next_back().is_some_and(|c| !is_word_char(c));
-    let after_ok = text[end..].chars().next().is_some_and(|c| !is_word_char(c));
-    before_ok && after_ok
-}
-
-/// GFM flanking check for `*`/`**` emphasis: the inner text must not start
-/// or end with whitespace (rejects e.g. `2 * 3 * 4`).
-fn asterisk_inner_ok(inner: &str) -> bool {
-    let starts_ws = inner.chars().next().is_some_and(|c| c.is_whitespace());
-    let ends_ws = inner.chars().next_back().is_some_and(|c| c.is_whitespace());
-    !starts_ws && !ends_ws
-}
-
-/// Render GFM inline emphasis, code spans, links, and strikethrough within a
-/// single table cell as ANSI-styled text.
-///
-/// Markers are stripped and replaced with terminal styling (bold, italic,
-/// strikethrough, colored code/link text). Matches that violate GFM
-/// emphasis-flanking rules (intraword `_`/`__`, whitespace-flanked
-/// `*`/`**`) are left verbatim rather than styled. Returns the styled string
-/// together with its visible (Unicode) width, ignoring any ANSI codes
-/// already present in `text` -- `header` bolds plain (unstyled) segments too.
-pub fn render_inline(text: &str, header: bool) -> (String, usize) {
-    let mut styled = String::new();
-    let mut plain = String::new();
-    let mut last = 0;
-
-    let push_plain = |styled: &mut String, plain: &mut String, seg: &str| {
-        if seg.is_empty() {
-            return;
-        }
-        if header {
-            styled.push_str(&seg.style(base_style(true)).to_string());
-        } else {
-            styled.push_str(seg);
-        }
-        plain.push_str(seg);
-    };
-
-    for caps in INLINE_RE.captures_iter(text) {
-        let whole = caps.get(0).unwrap();
-        push_plain(&mut styled, &mut plain, &text[last..whole.start()]);
-
-        // `accepted` is `None` when GFM flanking rules reject this match;
-        // the whole match then falls through to verbatim output below.
-        let accepted: Option<(&str, Style)> = if let Some(m) = caps.name("code") {
-            let s = m.as_str();
-            Some((&s[1..s.len() - 1], base_style(header).truecolor(166, 227, 161)))
-        } else if caps.name("link").is_some() {
-            Some((
-                caps.name("ltext").unwrap().as_str(),
-                base_style(header).truecolor(137, 180, 250).underline(),
-            ))
-        } else if caps.name("bold").is_some() {
-            let inner = caps.name("btext").unwrap().as_str();
-            asterisk_inner_ok(inner).then(|| (inner, base_style(header).bold()))
-        } else if caps.name("bold2").is_some() {
-            let inner = caps.name("b2text").unwrap().as_str();
-            underscore_flanks_ok(text, whole.start(), whole.end())
-                .then(|| (inner, base_style(header).bold()))
-        } else if caps.name("strike").is_some() {
-            Some((
-                caps.name("stext").unwrap().as_str(),
-                base_style(header).strikethrough(),
-            ))
-        } else if caps.name("italic").is_some() {
-            let inner = caps.name("itext").unwrap().as_str();
-            asterisk_inner_ok(inner).then(|| (inner, base_style(header).italic()))
-        } else {
-            let inner = caps.name("i2text").unwrap().as_str();
-            underscore_flanks_ok(text, whole.start(), whole.end())
-                .then(|| (inner, base_style(header).italic()))
-        };
-
-        match accepted {
-            Some((inner, style)) => {
-                styled.push_str(&inner.style(style).to_string());
-                plain.push_str(inner);
-            }
-            None => push_plain(&mut styled, &mut plain, whole.as_str()),
-        }
-        last = whole.end();
-    }
-    push_plain(&mut styled, &mut plain, &text[last..]);
-
-    let width = UnicodeWidthStr::width(strip_ansi(&plain).as_str());
-    (styled, width)
+    widths
 }
 
 /// Streaming state machine: feed lines, get passthrough lines or rendered
@@ -291,7 +185,8 @@ impl TableAssembler {
     /// Feed a line to the assembler.
     ///
     /// - Returns `Pass(lines)` if the input and/or previously buffered content should be passed
-    ///   through unchanged to the engine.
+    ///   through to the engine. Body lines get inline markdown formatting
+    ///   (emphasis, code spans, clickable links); fenced code stays verbatim.
     /// - Returns `Buffered` if the line is held for lookahead (candidate or table row).
     /// - Returns `Table { rendered, trailing }` if the input ended the table; table is rendered,
     ///   and `trailing` is passed through separately (may contain empty string or actual content).
@@ -312,13 +207,13 @@ impl TableAssembler {
                     self.state = State::Candidate(line.to_string());
                     FeedResult::Buffered
                 } else {
-                    FeedResult::Pass(vec![line.to_string()])
+                    FeedResult::Pass(vec![render_markdown_line(line)])
                 }
             }
             State::Candidate(held) => {
                 if is_fence_toggle(line) {
                     self.in_fence = true;
-                    return FeedResult::Pass(vec![held, line.to_string()]);
+                    return FeedResult::Pass(vec![render_markdown_line(&held), line.to_string()]);
                 }
                 if let Some(aligns) = is_delimiter_row(line) {
                     let header = split_cells(&held);
@@ -335,16 +230,19 @@ impl TableAssembler {
                 // line may itself start a new candidate.
                 if looks_like_row(line) {
                     self.state = State::Candidate(line.to_string());
-                    FeedResult::Pass(vec![held])
+                    FeedResult::Pass(vec![render_markdown_line(&held)])
                 } else {
-                    FeedResult::Pass(vec![held, line.to_string()])
+                    FeedResult::Pass(vec![
+                        render_markdown_line(&held),
+                        render_markdown_line(line),
+                    ])
                 }
             }
             State::InTable(mut table) => {
                 if is_fence_toggle(line) {
                     self.in_fence = true;
                     FeedResult::Table {
-                        rendered: render_table(&table),
+                        rendered: render_table(&table, detect_width()),
                         trailing: Some(line.to_string()),
                     }
                 } else if looks_like_row(line) {
@@ -353,8 +251,8 @@ impl TableAssembler {
                     FeedResult::Buffered
                 } else {
                     FeedResult::Table {
-                        rendered: render_table(&table),
-                        trailing: Some(line.to_string()),
+                        rendered: render_table(&table, detect_width()),
+                        trailing: Some(render_markdown_line(line)),
                     }
                 }
             }
@@ -369,8 +267,8 @@ impl TableAssembler {
     pub fn flush(&mut self) -> FlushResult {
         match std::mem::replace(&mut self.state, State::Idle) {
             State::Idle => FlushResult::Nothing,
-            State::Candidate(held) => FlushResult::Raw(held),
-            State::InTable(table) => FlushResult::Table(render_table(&table)),
+            State::Candidate(held) => FlushResult::Raw(render_markdown_line(&held)),
+            State::InTable(table) => FlushResult::Table(render_table(&table, detect_width())),
         }
     }
 }
@@ -381,12 +279,21 @@ impl Default for TableAssembler {
     }
 }
 
+/// Detected terminal width in columns, falling back to 80 when the output
+/// is not a terminal (same convention as the trigger separator).
+fn detect_width() -> usize {
+    terminal_size::terminal_size()
+        .map(|(w, _)| w.0 as usize)
+        .unwrap_or(80)
+}
+
 /// Render a parsed table as box-drawn ANSI lines with styled borders and header.
 ///
 /// Returns one line per output row: top border, header, middle border (if data),
 /// data rows, and bottom border. Borders are styled dimmed, header is bold,
-/// and cell content respects alignment and inline styling.
-pub fn render_table(table: &Table) -> Vec<String> {
+/// and cell content respects alignment and inline styling. Columns are shrunk
+/// and their content wrapped as needed so the box fits within `max_width`.
+pub fn render_table(table: &Table, max_width: usize) -> Vec<String> {
     let dim = Style::new().dimmed();
 
     let ncols = table
@@ -408,25 +315,26 @@ pub fn render_table(table: &Table) -> Vec<String> {
     let mut aligns = table.aligns.clone();
     aligns.resize(ncols, Alignment::Left);
 
-    // Render all cells up front: (styled, width) per cell.
-    let header_cells: Vec<(String, usize)> =
-        header.iter().map(|c| render_inline(c, true)).collect();
-    let body_cells: Vec<Vec<(String, usize)>> = table
+    // Parse all cells up front into styled segments.
+    let header_cells: Vec<Vec<Seg>> =
+        header.iter().map(|c| inline_segments(c, true)).collect();
+    let body_cells: Vec<Vec<Vec<Seg>>> = table
         .rows
         .iter()
-        .map(|r| pad_row(r).iter().map(|c| render_inline(c, false)).collect())
+        .map(|r| pad_row(r).iter().map(|c| inline_segments(c, false)).collect())
         .collect();
 
-    // Column widths: max visible width, minimum 1.
-    let mut widths = vec![1usize; ncols];
-    for (i, (_, w)) in header_cells.iter().enumerate() {
-        widths[i] = widths[i].max(*w);
-    }
-    for row in &body_cells {
-        for (i, (_, w)) in row.iter().enumerate() {
-            widths[i] = widths[i].max(*w);
+    let cell_width =
+        |segs: &[Seg]| -> usize { segs.iter().map(|s| visible(&s.text)).sum() };
+
+    // Natural column widths: max visible width, minimum 1.
+    let mut natural = vec![1usize; ncols];
+    for row in body_cells.iter().chain([&header_cells]) {
+        for (i, segs) in row.iter().enumerate() {
+            natural[i] = natural[i].max(cell_width(segs));
         }
     }
+    let widths = fit_widths(&natural, max_width);
 
     let border = |left: char, mid: char, right: char| -> String {
         let inner: Vec<String> = widths.iter().map(|w| "─".repeat(w + 2)).collect();
@@ -435,33 +343,45 @@ pub fn render_table(table: &Table) -> Vec<String> {
             .to_string()
     };
 
-    let content_row = |cells: &[(String, usize)]| -> String {
+    // Render one logical row: cells wrap to their column width, the tallest
+    // cell sets the physical line count, shorter cells pad with blanks.
+    let content_rows = |cells: &[Vec<Seg>], out: &mut Vec<String>| {
         let sep = "│".style(dim).to_string();
-        let mut line = sep.clone();
-        for (i, (styled, width)) in cells.iter().enumerate() {
-            let fill = widths[i] - width;
-            let (l, r) = match aligns[i] {
-                Alignment::Left => (0, fill),
-                Alignment::Right => (fill, 0),
-                Alignment::Center => (fill / 2, fill - fill / 2),
-            };
-            line.push(' ');
-            line.push_str(&" ".repeat(l));
-            line.push_str(styled);
-            line.push_str(&" ".repeat(r));
-            line.push(' ');
-            line.push_str(&sep);
+        let wrapped: Vec<Vec<(String, usize)>> = cells
+            .iter()
+            .enumerate()
+            .map(|(i, segs)| wrap_cell(segs, widths[i]))
+            .collect();
+        let height = wrapped.iter().map(|c| c.len()).max().unwrap_or(1);
+        for li in 0..height {
+            let mut line = sep.clone();
+            for (i, cell) in wrapped.iter().enumerate() {
+                let empty = (String::new(), 0);
+                let (styled, width) = cell.get(li).unwrap_or(&empty);
+                let fill = widths[i].saturating_sub(*width);
+                let (l, r) = match aligns[i] {
+                    Alignment::Left => (0, fill),
+                    Alignment::Right => (fill, 0),
+                    Alignment::Center => (fill / 2, fill - fill / 2),
+                };
+                line.push(' ');
+                line.push_str(&" ".repeat(l));
+                line.push_str(styled);
+                line.push_str(&" ".repeat(r));
+                line.push(' ');
+                line.push_str(&sep);
+            }
+            out.push(line);
         }
-        line
     };
 
     let mut out = Vec::new();
     out.push(border('┌', '┬', '┐'));
-    out.push(content_row(&header_cells));
+    content_rows(&header_cells, &mut out);
     if !body_cells.is_empty() {
         out.push(border('├', '┼', '┤'));
         for row in &body_cells {
-            out.push(content_row(row));
+            content_rows(row, &mut out);
         }
     }
     out.push(border('└', '┴', '┘'));
@@ -471,6 +391,9 @@ pub fn render_table(table: &Table) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use unicode_width::UnicodeWidthStr;
+
+    use crate::trigger::strip_ansi;
 
     #[test]
     fn split_outer_pipes_dropped() {
@@ -544,125 +467,6 @@ mod tests {
         assert!(!looks_like_row("   "));
     }
 
-    #[test]
-    fn inline_plain_text_passthrough() {
-        let (styled, width) = render_inline("hello", false);
-        assert_eq!(styled, "hello");
-        assert_eq!(width, 5);
-    }
-
-    #[test]
-    fn inline_bold_markers_stripped() {
-        let (styled, width) = render_inline("**hi**", false);
-        assert!(!styled.contains("**"), "markers must be stripped: {styled:?}");
-        assert!(styled.contains("hi"));
-        assert!(styled.contains("\x1b["), "should carry ANSI styling");
-        assert_eq!(width, 2);
-    }
-
-    #[test]
-    fn inline_code_markers_stripped() {
-        let (styled, width) = render_inline("`code x`", false);
-        assert!(!styled.contains('`'), "backticks must be stripped: {styled:?}");
-        assert!(styled.contains("code x"));
-        assert_eq!(width, 6);
-    }
-
-    #[test]
-    fn inline_link_shows_text_only() {
-        let (styled, width) = render_inline("[docs](https://x.io)", false);
-        assert!(styled.contains("docs"));
-        assert!(!styled.contains("https"), "url must be hidden: {styled:?}");
-        assert_eq!(width, 4);
-    }
-
-    #[test]
-    fn inline_strike_and_italic() {
-        let (s1, w1) = render_inline("~~gone~~", false);
-        assert!(!s1.contains('~'));
-        assert_eq!(w1, 4);
-        let (s2, w2) = render_inline("*it*", false);
-        assert!(!s2.contains('*'));
-        assert_eq!(w2, 2);
-    }
-
-    #[test]
-    fn inline_unbalanced_markers_verbatim() {
-        let (styled, width) = render_inline("**oops", false);
-        assert_eq!(styled, "**oops");
-        assert_eq!(width, 6);
-    }
-
-    #[test]
-    fn inline_header_plain_is_bold() {
-        let (styled, _) = render_inline("Name", true);
-        assert!(styled.contains("\x1b["), "header cells get bold styling");
-        assert!(styled.contains("Name"));
-    }
-
-    #[test]
-    fn inline_width_ignores_ansi_in_source() {
-        let (_, width) = render_inline("\x1b[31mred\x1b[0m", false);
-        assert_eq!(width, 3);
-    }
-
-    #[test]
-    fn inline_width_cjk() {
-        let (_, width) = render_inline("日本", false);
-        assert_eq!(width, 4);
-    }
-
-    #[test]
-    fn inline_intraword_underscore_verbatim() {
-        // GFM intraword emphasis: identifiers with underscores must survive
-        // untouched -- no deletion, no accidental italics.
-        let (styled, width) = render_inline("get_user_id", false);
-        assert_eq!(styled, "get_user_id");
-        assert_eq!(width, 11);
-    }
-
-    #[test]
-    fn inline_intraword_dunder_verbatim() {
-        let (styled, width) = render_inline("__init__", false);
-        assert_eq!(styled, "__init__");
-        assert_eq!(width, 8);
-    }
-
-    #[test]
-    fn inline_asterisk_with_whitespace_flanking_verbatim() {
-        // Inner text flanked by whitespace (e.g. multiplication) must not be
-        // treated as emphasis.
-        let (styled, width) = render_inline("2 * 3 * 4", false);
-        assert_eq!(styled, "2 * 3 * 4");
-        assert_eq!(width, 9);
-    }
-
-    #[test]
-    fn inline_bold_asterisk_still_works_near_underscore_identifier() {
-        let (styled, _) = render_inline("snake_case in **bold**", false);
-        assert!(!styled.contains("**"), "markers must be stripped: {styled:?}");
-        assert!(styled.contains("bold"));
-        assert!(styled.contains("snake_case"), "identifier must survive: {styled:?}");
-        assert!(styled.contains("\x1b["), "bold should carry ANSI styling: {styled:?}");
-    }
-
-    #[test]
-    fn inline_underscore_emphasis_still_works_with_space_flanking() {
-        let (styled, _) = render_inline("a _real_ emphasis", false);
-        assert!(!styled.contains('_'), "markers must be stripped: {styled:?}");
-        assert!(styled.contains("real"));
-        assert!(styled.contains("\x1b["), "italic should carry ANSI styling: {styled:?}");
-    }
-
-    #[test]
-    fn inline_mixed_segments() {
-        let (styled, width) = render_inline("use `x` **now**", false);
-        assert!(!styled.contains('`'));
-        assert!(!styled.contains("**"));
-        // "use x now" = 9 visible chars
-        assert_eq!(width, 9);
-    }
-
     fn table_2x2() -> Table {
         Table {
             header: vec!["Name".into(), "Value".into()],
@@ -676,7 +480,7 @@ mod tests {
 
     #[test]
     fn render_box_layout() {
-        let lines: Vec<String> = render_table(&table_2x2())
+        let lines: Vec<String> = render_table(&table_2x2(), 500)
             .iter()
             .map(|l| strip_ansi(l))
             .collect();
@@ -695,7 +499,7 @@ mod tests {
 
     #[test]
     fn render_has_styling() {
-        let lines = render_table(&table_2x2());
+        let lines = render_table(&table_2x2(), 500);
         assert!(lines[0].contains("\x1b["), "borders should be styled");
         assert!(lines[1].contains("\x1b["), "header should be styled");
     }
@@ -708,7 +512,7 @@ mod tests {
             aligns: vec![Alignment::Left, Alignment::Center, Alignment::Right],
             rows: vec![vec!["a".into(), "b".into(), "c".into()]],
         };
-        let lines: Vec<String> = render_table(&t).iter().map(|l| strip_ansi(l)).collect();
+        let lines: Vec<String> = render_table(&t, 500).iter().map(|l| strip_ansi(l)).collect();
         assert_eq!(lines[3], "│ a    │  b   │    c │");
     }
 
@@ -719,7 +523,7 @@ mod tests {
             aligns: vec![Alignment::Left, Alignment::Left],
             rows: vec![vec!["only".into()]],
         };
-        let lines: Vec<String> = render_table(&t).iter().map(|l| strip_ansi(l)).collect();
+        let lines: Vec<String> = render_table(&t, 500).iter().map(|l| strip_ansi(l)).collect();
         assert_eq!(lines[3], "│ only │   │");
     }
 
@@ -730,7 +534,7 @@ mod tests {
             aligns: vec![Alignment::Left],
             rows: vec![vec!["x".into(), "extra".into()]],
         };
-        let lines: Vec<String> = render_table(&t).iter().map(|l| strip_ansi(l)).collect();
+        let lines: Vec<String> = render_table(&t, 500).iter().map(|l| strip_ansi(l)).collect();
         // 2 columns in every line; no content dropped
         assert!(lines[1].matches('│').count() == 3, "{}", lines[1]);
         assert!(lines[3].contains("extra"));
@@ -743,7 +547,7 @@ mod tests {
             aligns: vec![Alignment::Left, Alignment::Left],
             rows: vec![],
         };
-        let lines: Vec<String> = render_table(&t).iter().map(|l| strip_ansi(l)).collect();
+        let lines: Vec<String> = render_table(&t, 500).iter().map(|l| strip_ansi(l)).collect();
         assert_eq!(lines.len(), 3); // top, header, bottom
         assert!(lines[2].starts_with('└'));
     }
@@ -755,9 +559,240 @@ mod tests {
             aligns: vec![Alignment::Left],
             rows: vec![vec!["**hi**".into()]],
         };
-        let lines: Vec<String> = render_table(&t).iter().map(|l| strip_ansi(l)).collect();
+        let lines: Vec<String> = render_table(&t, 500).iter().map(|l| strip_ansi(l)).collect();
         // visible "hi" (2 wide) < "A"… column width is max(1, 2) = 2
         assert_eq!(lines[3], "│ hi │");
+    }
+
+    /// Visible width of a rendered line (ANSI stripped), using the same
+    /// emoji-width mode as the renderer.
+    fn visible_width(line: &str) -> usize {
+        visible(line)
+    }
+
+    #[test]
+    fn render_fits_within_max_width() {
+        let t = Table {
+            header: vec!["Key".into(), "Description".into()],
+            aligns: vec![Alignment::Left, Alignment::Left],
+            rows: vec![vec![
+                "alpha".into(),
+                "a very long description that certainly exceeds the maximum table width".into(),
+            ]],
+        };
+        let lines: Vec<String> = render_table(&t, 40).iter().map(|l| strip_ansi(l)).collect();
+        for line in &lines {
+            assert!(
+                UnicodeWidthStr::width(line.as_str()) <= 40,
+                "line exceeds max width: {line:?}"
+            );
+        }
+        let all = lines.join("\n");
+        assert!(all.contains("alpha"));
+        assert!(all.contains("description"), "wrapped content must survive: {all}");
+    }
+
+    #[test]
+    fn render_wraps_at_word_boundaries_exact_layout() {
+        let t = Table {
+            header: vec!["A".into(), "B".into()],
+            aligns: vec![Alignment::Left, Alignment::Left],
+            rows: vec![vec!["x".into(), "one two three four".into()]],
+        };
+        let lines: Vec<String> = render_table(&t, 20).iter().map(|l| strip_ansi(l)).collect();
+        assert_eq!(
+            lines,
+            vec![
+                "┌───┬──────────────┐",
+                "│ A │ B            │",
+                "├───┼──────────────┤",
+                "│ x │ one two      │",
+                "│   │ three four   │",
+                "└───┴──────────────┘",
+            ]
+        );
+    }
+
+    #[test]
+    fn render_wrapped_link_reopens_hyperlink_per_line() {
+        let t = Table {
+            header: vec!["A".into(), "B".into()],
+            aligns: vec![Alignment::Left, Alignment::Left],
+            rows: vec![vec![
+                "x".into(),
+                "[a very long link text wrapping](https://x.io)".into(),
+            ]],
+        };
+        let rendered = render_table(&t, 20);
+        let link_lines: Vec<&String> = rendered
+            .iter()
+            .filter(|l| l.contains("\x1b]8;;https://x.io\x1b\\"))
+            .collect();
+        assert!(link_lines.len() >= 2, "link should wrap across lines");
+        // Every line that opens a hyperlink also closes it, so the link
+        // never spans borders or padding.
+        for line in link_lines {
+            assert!(
+                line.contains("\x1b]8;;\x1b\\"),
+                "hyperlink must close on its own line: {line:?}"
+            );
+        }
+        for line in &rendered {
+            assert!(visible_width(line) <= 20, "line too wide: {line:?}");
+        }
+    }
+
+    #[test]
+    fn render_wrapped_emoji_sequence_keeps_borders_aligned() {
+        // U+2764 U+FE0F is an emoji presentation sequence: width 2 at string
+        // level. Char-by-char counting would see 1+0 and misalign borders on
+        // wrapped rows.
+        let t = Table {
+            header: vec!["Tool".into(), "Verdict".into()],
+            aligns: vec![Alignment::Left, Alignment::Left],
+            rows: vec![vec![
+                "delta".into(),
+                "❤️ was already using it without realizing love it".into(),
+            ]],
+        };
+        let lines: Vec<String> = render_table(&t, 40).iter().map(|l| strip_ansi(l)).collect();
+        let widths: Vec<usize> = lines.iter().map(|l| visible_width(l)).collect();
+        assert!(
+            widths.iter().all(|&w| w == widths[0]),
+            "all lines must be equally wide: {widths:?}\n{lines:#?}"
+        );
+    }
+
+    #[test]
+    fn render_hard_breaks_long_tokens() {
+        let t = Table {
+            header: vec!["A".into(), "B".into()],
+            aligns: vec![Alignment::Left, Alignment::Left],
+            rows: vec![vec!["x".into(), "abcdefghijkl".into()]],
+        };
+        // chrome 7 + col A 1 → column B gets 6.
+        let lines: Vec<String> = render_table(&t, 14).iter().map(|l| strip_ansi(l)).collect();
+        assert!(lines.iter().any(|l| l.contains("abcdef")), "{lines:?}");
+        assert!(lines.iter().any(|l| l.contains("ghijkl")), "{lines:?}");
+        for line in &lines {
+            assert!(visible_width(line) <= 14, "line too wide: {line:?}");
+        }
+    }
+
+    #[test]
+    fn render_shaves_widest_column_first() {
+        let t = Table {
+            header: vec!["A".into(), "B".into()],
+            aligns: vec![Alignment::Left, Alignment::Left],
+            rows: vec![vec![
+                "short cell".into(),
+                "a considerably longer cell with much more text in it".into(),
+            ]],
+        };
+        let lines: Vec<String> = render_table(&t, 40).iter().map(|l| strip_ansi(l)).collect();
+        // The short column keeps its natural width; only the wide one wraps.
+        assert!(lines.iter().any(|l| l.contains(" short cell ")), "{lines:?}");
+        for line in &lines {
+            assert!(visible_width(line) <= 40, "line too wide: {line:?}");
+        }
+    }
+
+    #[test]
+    fn render_wrap_cjk_stays_within_width() {
+        let t = Table {
+            header: vec!["A".into(), "B".into()],
+            aligns: vec![Alignment::Left, Alignment::Left],
+            rows: vec![vec!["x".into(), "日本語日本語".into()]],
+        };
+        // Column B gets 6 → wraps into width-4 slices of two CJK chars… any
+        // split is fine as long as no line overflows and nothing is lost.
+        let lines: Vec<String> = render_table(&t, 14).iter().map(|l| strip_ansi(l)).collect();
+        for line in &lines {
+            assert!(visible_width(line) <= 14, "line too wide: {line:?}");
+        }
+        let all = lines.join("");
+        assert_eq!(all.matches('日').count(), 2, "{lines:?}");
+        assert_eq!(all.matches('本').count(), 2, "{lines:?}");
+        assert_eq!(all.matches('語').count(), 2, "{lines:?}");
+    }
+
+    #[test]
+    fn render_wrap_ignores_source_ansi_in_widths() {
+        let t = Table {
+            header: vec!["A".into(), "B".into()],
+            aligns: vec![Alignment::Left, Alignment::Left],
+            rows: vec![vec![
+                "x".into(),
+                "\x1b[31mred words wrapping here nicely\x1b[0m".into(),
+            ]],
+        };
+        let rendered = render_table(&t, 20);
+        for line in &rendered {
+            assert!(visible_width(line) <= 20, "line too wide: {line:?}");
+        }
+        // Escape sequences survive wrapping unsplit.
+        let all = rendered.join("\n");
+        assert!(all.contains("\x1b[31m"), "source ANSI must survive");
+        let plain = strip_ansi(&all);
+        assert!(plain.contains("red words"), "{plain}");
+        assert!(plain.contains("nicely"), "{plain}");
+    }
+
+    #[test]
+    fn render_floor_reached_overflows_gracefully() {
+        let t = Table {
+            header: vec!["AAAA".into(), "BBBB".into(), "CCCC".into()],
+            aligns: vec![Alignment::Left; 3],
+            rows: vec![vec!["aaaa".into(), "bbbb".into(), "cccc".into()]],
+        };
+        // chrome 10 + 3 floors of 3 = 19 minimum; max_width 12 can't be met.
+        let lines: Vec<String> = render_table(&t, 12).iter().map(|l| strip_ansi(l)).collect();
+        for line in &lines {
+            assert_eq!(visible_width(line), 19, "floor width box: {line:?}");
+        }
+        // Content is wrapped, not dropped.
+        let all = lines.join("");
+        assert!(all.contains("aaa"));
+        assert!(all.contains("ccc"));
+    }
+
+    #[test]
+    fn render_wrapped_header_keeps_bold() {
+        let t = Table {
+            header: vec!["K".into(), "A Rather Long Header Title".into()],
+            aligns: vec![Alignment::Left, Alignment::Left],
+            rows: vec![vec!["v".into(), "x".into()]],
+        };
+        let rendered = render_table(&t, 18);
+        let plain: Vec<String> = rendered.iter().map(|l| strip_ansi(l)).collect();
+        for line in &plain {
+            assert!(visible_width(line) <= 18, "line too wide: {line:?}");
+        }
+        // Header spans multiple lines, each carrying styling.
+        let header_lines: Vec<&String> = rendered
+            .iter()
+            .filter(|l| {
+                let p = strip_ansi(l);
+                p.contains("Rather") || p.contains("Header")
+            })
+            .collect();
+        assert!(header_lines.len() >= 2, "header should wrap: {plain:?}");
+        for line in &header_lines {
+            assert!(line.contains("\x1b["), "wrapped header line should be styled");
+        }
+    }
+
+    #[test]
+    fn render_alignment_applies_per_wrapped_line() {
+        let t = Table {
+            header: vec!["A".into(), "Num".into()],
+            aligns: vec![Alignment::Left, Alignment::Right],
+            rows: vec![vec!["x".into(), "aaa bb".into()]],
+        };
+        // Column B natural 6, shrink to 3 → two lines, right-aligned.
+        let lines: Vec<String> = render_table(&t, 11).iter().map(|l| strip_ansi(l)).collect();
+        assert!(lines.contains(&"│ x │ aaa │".to_string()), "{lines:?}");
+        assert!(lines.contains(&"│   │  bb │".to_string()), "{lines:?}");
     }
 
     fn feed_all(a: &mut TableAssembler, lines: &[&str]) -> Vec<FeedResult> {
@@ -881,6 +916,66 @@ mod tests {
         match a.flush() {
             FlushResult::Table(lines) => assert_eq!(lines.len(), 3), // header-only box
             other => panic!("expected Table, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn assembler_formats_body_lines() {
+        let mut a = TableAssembler::new();
+        match a.feed("some **bold** text") {
+            FeedResult::Pass(v) => {
+                assert_eq!(v.len(), 1);
+                assert_eq!(strip_ansi(&v[0]), "some bold text");
+                assert!(v[0].contains("\x1b["), "should carry ANSI styling: {:?}", v[0]);
+            }
+            other => panic!("expected Pass, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn assembler_formats_released_candidate() {
+        let mut a = TableAssembler::new();
+        assert!(matches!(a.feed("| **a** | b |"), FeedResult::Buffered));
+        match a.feed("plain") {
+            FeedResult::Pass(v) => {
+                assert_eq!(strip_ansi(&v[0]), "| a | b |", "markers stripped: {:?}", v[0]);
+                assert_eq!(v[1], "plain");
+            }
+            other => panic!("expected Pass, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn assembler_formats_trailing_line_after_table() {
+        let mut a = TableAssembler::new();
+        feed_all(&mut a, &["| a |", "|---|", "| 1 |"]);
+        match a.feed("after **bold**") {
+            FeedResult::Table { trailing, .. } => {
+                let t = trailing.unwrap();
+                assert_eq!(strip_ansi(&t), "after bold");
+                assert!(t.contains("\x1b["), "trailing should be formatted: {t:?}");
+            }
+            other => panic!("expected Table, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn assembler_does_not_format_inside_fence() {
+        let mut a = TableAssembler::new();
+        assert!(matches!(a.feed("```"), FeedResult::Pass(_)));
+        match a.feed("let x = **not bold**;") {
+            FeedResult::Pass(v) => assert_eq!(v, vec!["let x = **not bold**;"]),
+            other => panic!("expected Pass, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn assembler_flush_formats_held_candidate() {
+        let mut a = TableAssembler::new();
+        a.feed("| **a** | b |");
+        match a.flush() {
+            FlushResult::Raw(l) => assert_eq!(strip_ansi(&l), "| a | b |"),
+            other => panic!("expected Raw, got {other:?}"),
         }
     }
 

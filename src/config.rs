@@ -78,6 +78,11 @@ pub struct Config {
     /// Default file mode: "less" (pager) or "cat" (print-and-exit). None = "less".
     #[serde(default)]
     pub default_file_mode: Option<String>,
+    /// Terminal cells an emoji presentation sequence (❤️ = U+2764+VS16)
+    /// occupies: "narrow" (1) or "wide" (2). None = auto-detect from
+    /// $TERM_PROGRAM / $TERM.
+    #[serde(default)]
+    pub emoji_width: Option<String>,
 }
 
 /// Return the default config file path using XDG_CONFIG_HOME or $HOME/.config.
@@ -1754,6 +1759,7 @@ lines = "+1"
             update_check_interval_days: 7,
             update_mode: None,
             default_file_mode: None,
+            emoji_width: None,
             profiles: {
                 let mut p = HashMap::new();
                 p.insert(
@@ -1817,6 +1823,16 @@ lines = "+1"
 
         unsafe { restore_env("XDG_CONFIG_HOME", prev_xdg) };
         unsafe { restore_env("HOME", prev_home) };
+    }
+
+    #[test]
+    fn config_emoji_width_deserialized() {
+        let tmp = TempDir::new().unwrap();
+        let config_path = tmp.path().join("config.toml");
+        std::fs::write(&config_path, "emoji_width = \"wide\"\n").unwrap();
+
+        let (config, _) = load_config(Some(&config_path)).unwrap().unwrap();
+        assert_eq!(config.emoji_width.as_deref(), Some("wide"));
     }
 
     #[test]
@@ -1946,6 +1962,7 @@ lines = "+1"
             update_check_interval_days: 7,
             update_mode: None,
             default_file_mode: None,
+            emoji_width: None,
         };
         let output = show_output(
             Some((&config, PathBuf::from("/tmp/test.toml"))),
@@ -2024,6 +2041,7 @@ lines = "+1"
             update_check_interval_days: 7,
             update_mode: None,
             default_file_mode: None,
+            emoji_width: None,
         };
         let output = show_output(
             Some((&config, PathBuf::from("/tmp/test.toml"))),

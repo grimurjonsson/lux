@@ -5,6 +5,20 @@ All notable changes to lux will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.16] - 2026-08-21
+Adds terminal-width-aware tables, inline markdown formatting, and clickable links; introduces local profiles with a `lux profile show` command, text insertion rules (insert-before/after, prepend, append), and a `next` scope for coloring lines after a trigger match.
+
+### Added
+- terminal-width-aware tables, inline markdown formatting, clickable links
+- add text insertion rules (insert-before/after, prepend, append) (#13)
+- add next scope to color N lines after a trigger match
+- lux profile show profile_name added
+- improve the README.md
+
+### Other
+- docs: add local profiles section to README
+- local profiles
+
 ## [0.1.15] - 2026-08-10
 Lux now renders GFM markdown tables as styled unicode boxes with inline formatting across all modes, expands @file.md includes via a new --expand-refs flag, and adds local profiles, `lux profile show`, text insertion rules, and a `next` scope for coloring lines after a match.
 

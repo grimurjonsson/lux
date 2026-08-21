@@ -601,6 +601,7 @@ mod tests {
             update_check_interval_days: 7,
             update_mode: None,
             default_file_mode: None,
+            emoji_width: None,
         };
         let cli = vec!["ERROR:red".to_string()];
         let rules = build_rules_with_config(&cli, Some(&config), None, None).unwrap();
@@ -635,6 +636,7 @@ mod tests {
             update_check_interval_days: 7,
             update_mode: None,
             default_file_mode: None,
+            emoji_width: None,
         };
         let rules = build_rules_with_config(&[], Some(&config), Some("django"), None).unwrap();
         // 1 profile + 1 global = 2
@@ -653,6 +655,7 @@ mod tests {
             update_check_interval_days: 7,
             update_mode: None,
             default_file_mode: None,
+            emoji_width: None,
             profiles: {
                 let mut p = HashMap::new();
                 p.insert(
