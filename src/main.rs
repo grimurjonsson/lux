@@ -335,6 +335,10 @@ fn run() -> anyhow::Result<()> {
         && slow_annotator.is_none()
         && is_markdown_syntax
     {
+        // Terminals disagree on emoji advance (VS16 sequences); ask this one
+        // directly before any output. No-op if config pinned the mode or
+        // there is no tty (env-based detection then applies).
+        lux::md_inline::probe_and_set_emoji_width();
         Some(TableAssembler::new())
     } else {
         None
