@@ -6,6 +6,7 @@ pub mod filter;
 pub mod follow;
 pub mod markup;
 pub mod md_include;
+pub mod md_inline;
 pub mod md_table;
 pub mod output;
 pub mod pager;
