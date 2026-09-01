@@ -389,6 +389,16 @@ Arguments:
 Options:
   -r, --rule <RULES>
           Add a coloring rule: PATTERN:STYLE[:SCOPE]
+          
+          SCOPE (default: line):
+            line                  color the entire line
+            match                 color only the matched text
+            capN                  color capture group N (e.g. cap1)
+            nextN                 color the next N lines after the match
+            insert-before:TEXT    insert a line before the matching line
+            insert-after:TEXT     insert a line after the matching line
+            prepend:TEXT          prepend text to the matching line
+            append:TEXT           append text to the matching line
 
       --color <COLOR>
           Control color output
