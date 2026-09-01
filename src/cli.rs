@@ -9,7 +9,17 @@ pub struct Cli {
     pub command: Option<Command>,
 
     /// Add a coloring rule: PATTERN:STYLE[:SCOPE]
-    #[arg(short = 'r', long = "rule", action = clap::ArgAction::Append)]
+    ///
+    /// SCOPE (default: line):
+    ///   line                  color the entire line
+    ///   match                 color only the matched text
+    ///   capN                  color capture group N (e.g. cap1)
+    ///   nextN                 color the next N lines after the match
+    ///   insert-before:TEXT    insert a line before the matching line
+    ///   insert-after:TEXT     insert a line after the matching line
+    ///   prepend:TEXT          prepend text to the matching line
+    ///   append:TEXT           append text to the matching line
+    #[arg(short = 'r', long = "rule", action = clap::ArgAction::Append, verbatim_doc_comment)]
     pub rules: Vec<String>,
 
     /// Control color output
