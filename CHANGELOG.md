@@ -5,6 +5,12 @@ All notable changes to lux will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.19] - 2026-09-01
+Improved `--rule` help text to document all available SCOPE options (line, match, capture groups, next-line coloring, and text insertion).
+
+### Added
+- adding better help stuff for scope
+
 ## [0.1.18] - 2026-08-21
 ## [0.1.17] - 2026-08-21
 Adds text insertion rules (insert-before/after, prepend, append), a "next" scope for coloring lines after a trigger match, local profiles with a `lux profile show` command, and fixes emoji width rendering by probing the terminal instead of trusting its name.
