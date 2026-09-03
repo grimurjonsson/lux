@@ -100,6 +100,12 @@ impl Engine {
         };
 
         if line.is_empty() {
+            // Nothing to style, but the syntax parser must still see the line:
+            // it carries state across lines, and in grammars like Markdown a
+            // blank line is what closes a list item or paragraph.
+            if let Some(ref mut sh) = self.syntax {
+                sh.highlight_line("");
+            }
             return empty;
         }
 
@@ -176,7 +182,7 @@ impl Engine {
         }
 
         // Add syntect base-layer spans (lowest priority)
-        if let Some(ref sh) = self.syntax {
+        if let Some(ref mut sh) = self.syntax {
             for (range, style) in sh.highlight_line(work_line) {
                 spans.push(Span {
                     range,
@@ -1067,5 +1073,33 @@ mod tests {
         let result = engine.apply("DATA here");
         // The prepended ">> " should be plain (no cyan styling from carry-forward)
         assert!(result.line.starts_with(">> "), "should have prepend, got: {}", result.line);
+    }
+
+    #[test]
+    fn blank_line_resets_markdown_list_context() {
+        // Engine::apply short-circuits on empty lines, but the syntax parser
+        // still needs to see them: in Markdown a blank line is what closes a
+        // list item / paragraph. If it is skipped, the list colour leaks into
+        // the paragraph that follows.
+        use crate::syntax::SyntaxHighlighter;
+        // Use a theme that colours `markup.list` so a leak is visible.
+        let md = || {
+            SyntaxHighlighter::for_file(
+                std::path::Path::new("notes.md"),
+                Some("base16-eighties.dark"),
+                None,
+            )
+            .unwrap()
+        };
+
+        let mut engine = Engine::new(vec![], true, Some(md()));
+        engine.apply("- a list item");
+        engine.apply("");
+        let after_list = engine.apply("Plain paragraph text").line;
+
+        let mut fresh = Engine::new(vec![], true, Some(md()));
+        let expected = fresh.apply("Plain paragraph text").line;
+
+        assert_eq!(after_list, expected);
     }
 }

@@ -48,6 +48,10 @@ const BUILTIN_SYNTAX_MAP: &[(&str, &str)] = &[
 pub struct SyntaxHighlighter {
     syntax: &'static SyntaxReference,
     theme: &'static highlighting::Theme,
+    /// Parser + highlighter state carried from one line to the next, so that
+    /// multi-line constructs (fenced code blocks in Markdown, block comments,
+    /// raw strings) keep their context.
+    lines: HighlightLines<'static>,
 }
 
 impl SyntaxHighlighter {
@@ -146,20 +150,35 @@ impl SyntaxHighlighter {
             .get(requested)
             .or_else(|| THEME_SET.themes.get(DEFAULT_THEME))?;
 
-        Some(Self { syntax, theme })
+        Some(Self {
+            syntax,
+            theme,
+            lines: HighlightLines::new(syntax, theme),
+        })
     }
 
-    /// Highlight a single line, returning byte-range spans with owo_colors styles.
+    /// Highlight the next line of the document, returning byte-range spans with
+    /// owo_colors styles.
     ///
-    /// Creates a fresh `HighlightLines` per call because Engine.apply takes `&self`.
-    /// This is acceptable for a CLI tool; the syntax/theme lookups are the expensive
-    /// part and those are cached in the statics.
+    /// Lines must be fed in document order: parser state is carried across calls
+    /// so that constructs spanning several lines (a ```lang fence in Markdown,
+    /// a block comment) are highlighted correctly.
     ///
     /// Regions whose foreground matches the theme default foreground are skipped
     /// (they represent "no highlighting").
-    pub fn highlight_line(&self, line: &str) -> Vec<(Range<usize>, Style)> {
-        let mut h = HighlightLines::new(self.syntax, self.theme);
-        let regions = match h.highlight_line(line, &SYNTAX_SET) {
+    pub fn highlight_line(&mut self, line: &str) -> Vec<(Range<usize>, Style)> {
+        // The syntax set is compiled in "newlines" mode: grammars rely on a
+        // literal '\n' to close line-scoped contexts such as '#' comments.
+        // Callers hand us lines with the newline already stripped, so add it
+        // back for parsing and clip the resulting spans to the original length.
+        let with_newline;
+        let parse_input: &str = if line.ends_with('\n') {
+            line
+        } else {
+            with_newline = format!("{line}\n");
+            &with_newline
+        };
+        let regions = match self.lines.highlight_line(parse_input, &SYNTAX_SET) {
             Ok(r) => r,
             Err(_) => return vec![],
         };
@@ -193,15 +212,21 @@ impl SyntaxHighlighter {
             let fg_is_default = fg.r == default_fg.r && fg.g == default_fg.g && fg.b == default_fg.b;
             let bg_is_default = bg.r == default_bg.r && bg.g == default_bg.g && bg.b == default_bg.b;
 
+            let start = byte_offset;
+            let end = (byte_offset + len).min(line.len());
+            byte_offset += len;
+
+            if start >= end {
+                continue;
+            }
+
             if !fg_is_default || !bg_is_default {
                 let mut owo_style = Style::new().truecolor(fg.r, fg.g, fg.b);
                 if !bg_is_default {
                     owo_style = owo_style.on_truecolor(bg.r, bg.g, bg.b);
                 }
-                spans.push((byte_offset..byte_offset + len, owo_style));
+                spans.push((start..end, owo_style));
             }
-
-            byte_offset += len;
         }
 
         spans
@@ -286,14 +311,14 @@ mod tests {
 
     #[test]
     fn highlight_line_produces_spans_for_rust() {
-        let h = SyntaxHighlighter::for_file(Path::new("test.rs"), None, None).unwrap();
+        let mut h = SyntaxHighlighter::for_file(Path::new("test.rs"), None, None).unwrap();
         let spans = h.highlight_line("fn main() { let x = 42; }");
         assert!(!spans.is_empty(), "Expected non-empty spans for Rust code");
     }
 
     #[test]
     fn highlight_line_empty_input() {
-        let h = SyntaxHighlighter::for_file(Path::new("test.rs"), None, None).unwrap();
+        let mut h = SyntaxHighlighter::for_file(Path::new("test.rs"), None, None).unwrap();
         let spans = h.highlight_line("");
         assert!(spans.is_empty() || spans.iter().all(|(r, _)| r.is_empty()));
     }
@@ -331,6 +356,71 @@ mod tests {
         assert!(names.contains(&"Rust"), "Expected Rust in syntaxes");
         assert!(names.contains(&"Python"), "Expected Python in syntaxes");
         assert!(names.contains(&"Go"), "Expected Go in syntaxes");
+    }
+
+    #[test]
+    fn highlight_line_keeps_fence_language_across_lines() {
+        // A fenced code block's body is only highlightable if the parser
+        // remembers (from the opening fence line) which language it is in.
+        let mut h = SyntaxHighlighter::for_file(Path::new("notes.md"), None, None).unwrap();
+        h.highlight_line("```csharp");
+        let spans = h.highlight_line("public class Foo { }");
+        assert!(
+            !spans.is_empty(),
+            "code inside a ```csharp fence should be highlighted with the C# grammar"
+        );
+    }
+
+    #[test]
+    fn highlight_line_fence_closes_and_returns_to_markdown() {
+        let mut h = SyntaxHighlighter::for_file(Path::new("notes.md"), None, None).unwrap();
+        h.highlight_line("```csharp");
+        h.highlight_line("public class Foo { }");
+        h.highlight_line("```");
+        let after_fence = h.highlight_line("# Heading");
+        // Once the fence closes, a heading must tokenise exactly as it would at
+        // the top of a fresh document. If we were stuck inside the C# grammar
+        // the spans would differ.
+        let mut fresh = SyntaxHighlighter::for_file(Path::new("notes.md"), None, None).unwrap();
+        let expected = fresh.highlight_line("# Heading");
+        assert_eq!(after_fence, expected);
+    }
+
+    #[test]
+    fn highlight_line_single_line_comment_does_not_leak_into_next_line() {
+        // With parser state carried across lines, a line comment must still
+        // end at its own line and never colour the code that follows it.
+        let mut h = SyntaxHighlighter::for_file(Path::new("main.rs"), None, None).unwrap();
+        h.highlight_line("// a comment");
+        let spans = h.highlight_line("fn main() {}");
+        assert!(
+            spans.len() > 1,
+            "expected keyword/ident spans on the line after a comment, got {spans:?}"
+        );
+    }
+
+    #[test]
+    fn highlight_line_hash_comment_does_not_leak_into_next_line() {
+        // Bash/Python '#' comments only end at a literal '\n'. Callers pass
+        // lines without one, so the highlighter must add it or the comment
+        // colour bleeds into every following line.
+        let mut h = SyntaxHighlighter::for_file(Path::new("run.sh"), None, None).unwrap();
+        h.highlight_line("# a comment");
+        let after_comment = h.highlight_line("ls -la");
+        let mut fresh = SyntaxHighlighter::for_file(Path::new("run.sh"), None, None).unwrap();
+        assert_eq!(after_comment, fresh.highlight_line("ls -la"));
+    }
+
+    #[test]
+    fn highlight_line_spans_stay_within_line() {
+        let mut h = SyntaxHighlighter::for_file(Path::new("run.sh"), None, None).unwrap();
+        let line = "# a comment";
+        let spans = h.highlight_line(line);
+        assert!(!spans.is_empty());
+        assert!(
+            spans.iter().all(|(r, _)| r.end <= line.len()),
+            "span ranges must not extend past the line: {spans:?}"
+        );
     }
 
     #[test]
