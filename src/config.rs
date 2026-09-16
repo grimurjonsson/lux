@@ -2,7 +2,8 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
+use fancy_regex::Regex;
 use owo_colors::{OwoColorize, Style, XtermColors};
 use serde::Deserialize;
 
@@ -852,25 +853,23 @@ pub fn show_profile_to(
 
     // Preview
     if !profile.rules.is_empty() {
-        let example_lines = example_lines_for_profile(name, &profile);
+        let example_lines = example_lines_for_profile(name, &profile)?;
         if !example_lines.is_empty() {
             // Build engine from profile rules
             let mut rules = Vec::new();
             for (i, rc) in profile.rules.iter().enumerate() {
                 let rule = if let Some(ref text) = rc.text {
-                    crate::rules::rule_from_config_with_text(&rc.pattern, &rc.style, &rc.scope, text, i).ok()
+                    crate::rules::rule_from_config_with_text(&rc.pattern, &rc.style, &rc.scope, text, i)?
                 } else {
-                    rule_from_config(&rc.pattern, &rc.style, &rc.scope, i).ok()
+                    rule_from_config(&rc.pattern, &rc.style, &rc.scope, i)?
                 };
-                if let Some(rule) = rule {
-                    rules.push(rule);
-                }
+                rules.push(rule);
             }
             let mut engine = Engine::new(rules, true, None);
 
             writeln!(out, "  {}", "Preview:".bold())?;
             for line in &example_lines {
-                let result = engine.apply(line);
+                let result = engine.apply(line)?;
                 for l in &result.before {
                     writeln!(out, "    {}", l)?;
                 }
@@ -937,8 +936,8 @@ fn find_profile_by_name(
 }
 
 /// Return example text lines appropriate for demonstrating a profile's rules.
-fn example_lines_for_profile(name: &str, profile: &ProfileConfig) -> Vec<String> {
-    match name {
+fn example_lines_for_profile(name: &str, profile: &ProfileConfig) -> Result<Vec<String>> {
+    Ok(match name {
         "logs" => vec![
             "2024-03-20 10:15:30 INFO  Application started successfully".into(),
             "2024-03-20 10:15:31 DEBUG Loading configuration from config.yml".into(),
@@ -961,14 +960,12 @@ fn example_lines_for_profile(name: &str, profile: &ProfileConfig) -> Vec<String>
             "  -h, --help               Print help".into(),
             r#"  -V, --version            Print version [possible values: full, short]"#.into(),
         ],
-        _ => generate_example_lines(profile),
-    }
+        _ => generate_example_lines(profile)?,
+    })
 }
 
 /// Generate example lines for a custom profile by matching rules against a sample pool.
-fn generate_example_lines(profile: &ProfileConfig) -> Vec<String> {
-    use regex::Regex;
-
+fn generate_example_lines(profile: &ProfileConfig) -> Result<Vec<String>> {
     const SAMPLE_POOL: &[&str] = &[
         "2024-03-20 10:15:30 INFO  Application started on port 8080",
         "2024-03-20 10:15:31 DEBUG Loading configuration from /etc/app.yml",
@@ -1003,27 +1000,33 @@ fn generate_example_lines(profile: &ProfileConfig) -> Vec<String> {
     let mut lines = Vec::new();
 
     for rule in &profile.rules {
-        if let Ok(re) = Regex::new(&rule.pattern) {
-            // First try the sample pool
-            let mut found = false;
-            for &sample in SAMPLE_POOL {
-                if re.is_match(sample) && !used.contains(sample) {
-                    used.insert(sample);
-                    lines.push(sample.to_string());
-                    found = true;
-                    break;
-                }
+        let re = Regex::new(&rule.pattern)
+            .with_context(|| format!("invalid preview pattern '{}'", rule.pattern))?;
+        // First try the sample pool
+        let mut found = false;
+        for &sample in SAMPLE_POOL {
+            if re
+                .is_match(sample)
+                .with_context(|| format!("failed to match preview pattern '{}'", rule.pattern))?
+                && !used.contains(sample)
+            {
+                used.insert(sample);
+                lines.push(sample.to_string());
+                found = true;
+                break;
             }
-            // If no pool match, try to synthesize a line from the pattern
-            if !found {
-                if let Some(line) = synthesize_example(&rule.pattern, &re) {
-                    lines.push(line);
-                }
+        }
+        // If no pool match, try to synthesize a line from the pattern
+        if !found {
+            if let Some(line) = synthesize_example(&rule.pattern, &re)
+                .with_context(|| format!("failed to match preview pattern '{}'", rule.pattern))?
+            {
+                lines.push(line);
             }
-            // For next scope, add a sample "next" line so the preview shows the effect
-            if rule.scope.starts_with("next") {
-                lines.push(format!("  (this line would be styled {})", rule.style));
-            }
+        }
+        // For next scope, add a sample "next" line so the preview shows the effect
+        if rule.scope.starts_with("next") {
+            lines.push(format!("  (this line would be styled {})", rule.style));
         }
     }
 
@@ -1031,11 +1034,11 @@ fn generate_example_lines(profile: &ProfileConfig) -> Vec<String> {
         lines.push("(no matching examples — try: echo 'your text' | lux -p <name>)".into());
     }
 
-    lines
+    Ok(lines)
 }
 
 /// Try to synthesize an example line from a regex pattern by extracting literal parts.
-fn synthesize_example(pattern: &str, compiled: &regex::Regex) -> Option<String> {
+fn synthesize_example(pattern: &str, compiled: &Regex) -> Result<Option<String>> {
     // Strip common regex prefixes/modifiers
     let cleaned = pattern
         .replace("(?i)", "")
@@ -1135,27 +1138,27 @@ fn synthesize_example(pattern: &str, compiled: &regex::Regex) -> Option<String> 
 
     let literal = literal.trim().to_string();
     if literal.is_empty() {
-        return None;
+        return Ok(None);
     }
 
     // Try the literal as-is first (important for anchored patterns like ^-+$)
-    if compiled.is_match(&literal) {
-        return Some(literal);
+    if compiled.is_match(&literal)? {
+        return Ok(Some(literal));
     }
 
     // Try with a prefix for context
     let candidate = format!("Example: {}", literal);
-    if compiled.is_match(&candidate) {
-        return Some(candidate);
+    if compiled.is_match(&candidate)? {
+        return Ok(Some(candidate));
     }
 
     // Last resort: wrap in a realistic-looking line
     let padded = format!("2024-03-20 10:15:30 {}", literal);
-    if compiled.is_match(&padded) {
-        return Some(padded);
+    if compiled.is_match(&padded)? {
+        return Ok(Some(padded));
     }
 
-    None
+    Ok(None)
 }
 
 /// Print the color/style catalog to stdout with forced color output.

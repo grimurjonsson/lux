@@ -5,6 +5,27 @@ All notable changes to lux will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.21] - 2026-09-16
+Adds lookaround support in user regex patterns, lets CLI rules override config rules with the same pattern, and streamlines the grouped CLI help output.
+
+### Added
+- streamline grouped CLI help and refresh dependencies
+- support lookaround in user regex patterns
+
+### Fixed
+- replace same-pattern config rules with CLI rules
+
+## [Unreleased]
+
+### Added
+- Support lookaround in user regex patterns, including rules, filters, triggers, context boundaries, and profile wizard validation/previews. Report regex execution failures with pattern context.
+
+### Fixed
+- Make `-r` replace profile/global rules with the exact same pattern, including scopes and insertion templates, while preserving unrelated rules.
+
+### Changed
+- Compact `-h` and `--help` into the same grouped reference, with terminal-aware wrapping, colored headings, a rule-scope reference, and examples.
+
 ## [0.1.20] - 2026-09-03
 Fenced code blocks in markdown are now syntax-highlighted using the language named in the fence.
 

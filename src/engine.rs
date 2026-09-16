@@ -1,5 +1,6 @@
 use std::ops::Range;
 
+use anyhow::{Context, Result};
 use owo_colors::{OwoColorize, Style};
 
 use crate::markup;
@@ -92,7 +93,7 @@ impl Engine {
     /// When spans overlap, the one with the lowest priority number wins.
     /// Syntect base-layer spans have `usize::MAX` priority (lowest — only fills
     /// bytes that no rule claimed).
-    pub fn apply(&mut self, line: &str) -> ApplyResult {
+    pub fn apply(&mut self, line: &str) -> Result<ApplyResult> {
         let empty = ApplyResult {
             before: vec![],
             line: line.to_string(),
@@ -106,7 +107,7 @@ impl Engine {
             if let Some(ref mut sh) = self.syntax {
                 sh.highlight_line("");
             }
-            return empty;
+            return Ok(empty);
         }
 
         let has_syntax = self.syntax.is_some();
@@ -117,11 +118,11 @@ impl Engine {
         // If color is disabled but insert rules exist, skip span styling but still
         // process inserts (with color_enabled=false so templates render plain).
         if !self.color_enabled && !has_inserts {
-            return empty;
+            return Ok(empty);
         }
 
         if self.rules.is_empty() && !has_syntax && !has_pending {
-            return empty;
+            return Ok(empty);
         }
 
         // Always build a clean (ANSI-stripped) view for pattern matching, plus a
@@ -159,24 +160,26 @@ impl Engine {
             match &rule.scope {
                 MatchScope::Next(n) => {
                     // Next scope: match against clean text, queue style for upcoming lines
-                    if rule.pattern.is_match(work_line) {
+                    if rule.pattern.is_match(work_line)
+                        .with_context(|| format!("matching rule pattern '{}'", rule.pattern.as_str()))? {
                         self.pending_styles.push((rule.style, *n, rule.priority));
                     }
                 }
                 MatchScope::InsertBefore(tmpl) => {
-                    self.collect_inserts(work_line, &rule.pattern, &rule.style, tmpl, &mut before_lines);
+                    self.collect_inserts(work_line, &rule.pattern, &rule.style, tmpl, &mut before_lines)?;
                 }
                 MatchScope::InsertAfter(tmpl) => {
-                    self.collect_inserts(work_line, &rule.pattern, &rule.style, tmpl, &mut after_lines);
+                    self.collect_inserts(work_line, &rule.pattern, &rule.style, tmpl, &mut after_lines)?;
                 }
                 MatchScope::Prepend(tmpl) => {
-                    self.collect_inserts(work_line, &rule.pattern, &rule.style, tmpl, &mut prepend_parts);
+                    self.collect_inserts(work_line, &rule.pattern, &rule.style, tmpl, &mut prepend_parts)?;
                 }
                 MatchScope::Append(tmpl) => {
-                    self.collect_inserts(work_line, &rule.pattern, &rule.style, tmpl, &mut append_parts);
+                    self.collect_inserts(work_line, &rule.pattern, &rule.style, tmpl, &mut append_parts)?;
                 }
                 _ => {
-                    spans.extend(Self::rule_spans(rule, work_line));
+                    spans.extend(Self::rule_spans(rule, work_line)
+                        .with_context(|| format!("matching rule pattern '{}'", rule.pattern.as_str()))?);
                 }
             }
         }
@@ -224,11 +227,11 @@ impl Engine {
             final_line.push_str(a);
         }
 
-        ApplyResult {
+        Ok(ApplyResult {
             before: before_lines,
             line: final_line,
             after: after_lines,
-        }
+        })
     }
 
     /// Check if a rule's pattern matches the work line, and if so, render the
@@ -236,12 +239,13 @@ impl Engine {
     fn collect_inserts(
         &self,
         work_line: &str,
-        pattern: &regex::Regex,
+        pattern: &fancy_regex::Regex,
         style: &Style,
         tmpl: &InsertTemplate,
         target: &mut Vec<String>,
-    ) {
-        if let Some(caps) = pattern.captures(work_line) {
+    ) -> Result<()> {
+        if let Some(caps) = pattern.captures(work_line)
+            .with_context(|| format!("matching rule pattern '{}'", pattern.as_str()))? {
             let default_style = if *style == Style::new() {
                 None
             } else {
@@ -255,42 +259,48 @@ impl Engine {
             );
             target.push(rendered);
         }
+        Ok(())
     }
 
     /// Produce spans from a rule for all matches in the line.
-    fn rule_spans(rule: &Rule, line: &str) -> Vec<Span> {
+    fn rule_spans(rule: &Rule, line: &str) -> Result<Vec<Span>> {
+        let mut spans = Vec::new();
         match &rule.scope {
             MatchScope::Line => {
-                if rule.pattern.is_match(line) {
-                    vec![Span {
+                if rule.pattern.is_match(line)? {
+                    spans.push(Span {
                         range: 0..line.len(),
                         style: rule.style,
                         priority: rule.priority,
-                    }]
-                } else {
-                    vec![]
+                    });
                 }
             }
             MatchScope::Match => {
-                rule.pattern.find_iter(line).map(|m| Span {
-                    range: m.start()..m.end(),
-                    style: rule.style,
-                    priority: rule.priority,
-                }).collect()
-            }
-            MatchScope::Capture(n) => {
-                rule.pattern.captures_iter(line).filter_map(|caps| {
-                    caps.get(*n).map(|group| Span {
-                        range: group.start()..group.end(),
+                for matched in rule.pattern.find_iter(line) {
+                    let matched = matched?;
+                    spans.push(Span {
+                        range: matched.start()..matched.end(),
                         style: rule.style,
                         priority: rule.priority,
-                    })
-                }).collect()
+                    });
+                }
             }
-            MatchScope::Next(_) => vec![], // handled in apply() directly
+            MatchScope::Capture(n) => {
+                for caps in rule.pattern.captures_iter(line) {
+                    if let Some(group) = caps?.get(*n) {
+                        spans.push(Span {
+                            range: group.start()..group.end(),
+                            style: rule.style,
+                            priority: rule.priority,
+                        });
+                    }
+                }
+            }
+            MatchScope::Next(_) => {} // handled in apply() directly
             MatchScope::InsertBefore(_) | MatchScope::InsertAfter(_)
-            | MatchScope::Prepend(_) | MatchScope::Append(_) => vec![],
+            | MatchScope::Prepend(_) | MatchScope::Append(_) => {}
         }
+        Ok(spans)
     }
 
 }
@@ -486,7 +496,7 @@ mod tests {
             priority: usize,
         ) -> Self {
             use crate::color;
-            use regex::Regex;
+            use fancy_regex::Regex;
             let style = if style_spec.is_empty() {
                 Style::new()
             } else {
@@ -511,7 +521,7 @@ mod tests {
     fn test_single_rule_match() {
         let rules = vec![parse_rule("ERROR", "red", 0)];
         let mut engine = Engine::new(rules, true, None);
-        let result = engine.apply("ERROR: something broke");
+        let result = engine.apply("ERROR: something broke").unwrap();
         // Should be styled (not equal to plain text)
         assert_ne!(result.line, "ERROR: something broke");
     }
@@ -520,14 +530,14 @@ mod tests {
     fn test_no_match_passthrough() {
         let rules = vec![parse_rule("ERROR", "red", 0)];
         let mut engine = Engine::new(rules, true, None);
-        let result = engine.apply("just a normal line");
+        let result = engine.apply("just a normal line").unwrap();
         assert_eq!(result.line, "just a normal line");
     }
 
     #[test]
     fn test_no_rules_passthrough() {
         let mut engine = Engine::new(vec![], true, None);
-        let result = engine.apply("anything here");
+        let result = engine.apply("anything here").unwrap();
         assert_eq!(result.line, "anything here");
     }
 
@@ -535,7 +545,7 @@ mod tests {
     fn test_color_disabled_passthrough() {
         let rules = vec![parse_rule("ERROR", "red", 0)];
         let mut engine = Engine::new(rules, false, None);
-        let result = engine.apply("ERROR: something");
+        let result = engine.apply("ERROR: something").unwrap();
         assert_eq!(result.line, "ERROR: something");
     }
 
@@ -543,7 +553,7 @@ mod tests {
     fn test_no_rules_no_coloring() {
         let rules = build_rules(&[]).unwrap();
         let mut engine = Engine::new(rules, true, None);
-        let result = engine.apply("error happened");
+        let result = engine.apply("error happened").unwrap();
         assert_eq!(result.line, "error happened");
     }
 
@@ -554,7 +564,7 @@ mod tests {
         // Match-scope: only "ERROR" should be red, rest plain
         let rules = vec![Rule::test_with_scope("ERROR", "red", MatchScope::Match, 0)];
         let mut engine = Engine::new(rules, true, None);
-        let result = engine.apply("2024 ERROR: fail");
+        let result = engine.apply("2024 ERROR: fail").unwrap();
 
         // The plain text portions should appear unchanged
         assert!(result.line.contains("2024 "), "should contain plain '2024 '");
@@ -584,7 +594,7 @@ mod tests {
             0,
         )];
         let mut engine = Engine::new(rules, true, None);
-        let result = engine.apply("user=42 action=login");
+        let result = engine.apply("user=42 action=login").unwrap();
 
         // "user=" should be plain, " action=login" should be plain
         assert!(result.line.contains("user="), "should contain plain 'user='");
@@ -603,7 +613,7 @@ mod tests {
         // Line-scope regression check: entire line should be colored
         let rules = vec![Rule::test_with_scope("ERROR", "red", MatchScope::Line, 0)];
         let mut engine = Engine::new(rules, true, None);
-        let result = engine.apply("ERROR: fail");
+        let result = engine.apply("ERROR: fail").unwrap();
 
         let expected = "ERROR: fail"
             .style(crate::color::parse_style("red").unwrap())
@@ -619,7 +629,7 @@ mod tests {
             Rule::test_with_scope("ERROR", "red", MatchScope::Line, 1),
         ];
         let mut engine = Engine::new(rules, true, None);
-        let result = engine.apply("2024 ERROR: fail");
+        let result = engine.apply("2024 ERROR: fail").unwrap();
 
         // Should not be plain
         assert_ne!(result.line, "2024 ERROR: fail");
@@ -643,12 +653,12 @@ mod tests {
             Rule::test_with_scope("ERROR", "red", MatchScope::Match, 1),
         ];
         let mut engine = Engine::new(rules, true, None);
-        let result = engine.apply("ERROR: test");
+        let result = engine.apply("ERROR: test").unwrap();
 
         // Build what blue-only match scope would produce
         let blue_only = {
             let r = vec![Rule::test_with_scope("ERROR", "blue", MatchScope::Match, 0)];
-            Engine::new(r, true, None).apply("ERROR: test")
+            Engine::new(r, true, None).apply("ERROR: test").unwrap()
         };
         assert_eq!(result.line, blue_only.line, "lower priority number should win");
     }
@@ -663,7 +673,7 @@ mod tests {
             0,
         )];
         let mut engine = Engine::new(rules, true, None);
-        let result = engine.apply("foo bar");
+        let result = engine.apply("foo bar").unwrap();
         // Missing capture group -> no coloring, returned unchanged
         assert_eq!(result.line, "foo bar");
     }
@@ -671,7 +681,7 @@ mod tests {
     #[test]
     fn test_empty_rules_passthrough() {
         let mut engine = Engine::new(vec![], true, None);
-        let result = engine.apply("some line");
+        let result = engine.apply("some line").unwrap();
         assert_eq!(result.line, "some line");
     }
 
@@ -679,7 +689,7 @@ mod tests {
     fn test_color_disabled_returns_unchanged() {
         let rules = vec![Rule::test_with_scope("ERROR", "red", MatchScope::Match, 0)];
         let mut engine = Engine::new(rules, false, None);
-        let result = engine.apply("ERROR: test");
+        let result = engine.apply("ERROR: test").unwrap();
         assert_eq!(result.line, "ERROR: test");
     }
 
@@ -691,15 +701,15 @@ mod tests {
         let mut engine = Engine::new(rules, true, None);
 
         // The separator line itself should NOT be colored
-        let sep = engine.apply("----------");
+        let sep = engine.apply("----------").unwrap();
         assert_eq!(sep.line, "----------");
 
         // The next line SHOULD be colored
-        let next = engine.apply("this should be cyan");
+        let next = engine.apply("this should be cyan").unwrap();
         assert_ne!(next.line, "this should be cyan", "next line should be styled");
 
         // The line after that should NOT be colored (only next1)
-        let after = engine.apply("this should be plain");
+        let after = engine.apply("this should be plain").unwrap();
         assert_eq!(after.line, "this should be plain");
     }
 
@@ -708,16 +718,16 @@ mod tests {
         let rules = vec![Rule::test_with_scope("HEADER", "green", MatchScope::Next(2), 0)];
         let mut engine = Engine::new(rules, true, None);
 
-        let header = engine.apply("HEADER");
+        let header = engine.apply("HEADER").unwrap();
         assert_eq!(header.line, "HEADER", "trigger line should not be colored");
 
-        let line1 = engine.apply("line one");
+        let line1 = engine.apply("line one").unwrap();
         assert_ne!(line1.line, "line one", "first next line should be styled");
 
-        let line2 = engine.apply("line two");
+        let line2 = engine.apply("line two").unwrap();
         assert_ne!(line2.line, "line two", "second next line should be styled");
 
-        let line3 = engine.apply("line three");
+        let line3 = engine.apply("line three").unwrap();
         assert_eq!(line3.line, "line three", "third line should be plain");
     }
 
@@ -730,10 +740,10 @@ mod tests {
         ];
         let mut engine = Engine::new(rules, true, None);
 
-        engine.apply("----------"); // trigger
+        engine.apply("----------").unwrap(); // trigger
 
         // Next line has both: carry-forward cyan AND ERROR match (red wins by priority)
-        let result = engine.apply("ERROR happened");
+        let result = engine.apply("ERROR happened").unwrap();
         // Should be styled (not plain)
         assert_ne!(result.line, "ERROR happened");
     }
@@ -744,10 +754,10 @@ mod tests {
         let mut engine = Engine::new(rules, true, None);
 
         // No trigger matched
-        let line1 = engine.apply("no trigger here");
+        let line1 = engine.apply("no trigger here").unwrap();
         assert_eq!(line1.line, "no trigger here");
 
-        let line2 = engine.apply("still plain");
+        let line2 = engine.apply("still plain").unwrap();
         assert_eq!(line2.line, "still plain");
     }
 
@@ -756,15 +766,15 @@ mod tests {
         let rules = vec![Rule::test_with_scope("^---", "cyan", MatchScope::Next(1), 0)];
         let mut engine = Engine::new(rules, true, None);
 
-        engine.apply("---"); // trigger
-        let next1 = engine.apply("colored");
+        engine.apply("---").unwrap(); // trigger
+        let next1 = engine.apply("colored").unwrap();
         assert_ne!(next1.line, "colored");
 
-        let plain = engine.apply("plain");
+        let plain = engine.apply("plain").unwrap();
         assert_eq!(plain.line, "plain");
 
-        engine.apply("---"); // re-trigger
-        let next2 = engine.apply("colored again");
+        engine.apply("---").unwrap(); // re-trigger
+        let next2 = engine.apply("colored again").unwrap();
         assert_ne!(next2.line, "colored again");
     }
 
@@ -776,10 +786,10 @@ mod tests {
         let mut engine = Engine::new(rules, true, None);
 
         // Trigger line has ANSI codes wrapping the dashes (like colored output from another tool)
-        engine.apply("\x1b[38;5;243m------------------------------\x1b[0m");
+        engine.apply("\x1b[38;5;243m------------------------------\x1b[0m").unwrap();
 
         // The next line should still be colored (trigger matched the stripped version)
-        let next = engine.apply("this line should be magenta");
+        let next = engine.apply("this line should be magenta").unwrap();
         assert_ne!(next.line, "this line should be magenta", "next line should be styled");
     }
 
@@ -788,10 +798,10 @@ mod tests {
         let rules = vec![Rule::test_with_scope("TRIGGER", "cyan", MatchScope::Next(1), 0)];
         let mut engine = Engine::new(rules, true, None);
 
-        engine.apply("TRIGGER");
+        engine.apply("TRIGGER").unwrap();
 
         // Following line has ANSI codes — they should be stripped in output
-        let result = engine.apply("\x1b[31mred text\x1b[0m");
+        let result = engine.apply("\x1b[31mred text\x1b[0m").unwrap();
         // Output should NOT contain the original ANSI red code
         assert!(!result.line.contains("\x1b[31m"), "original ANSI should be stripped. Got: {}", result.line);
         // But should contain the text, styled by lux
@@ -810,7 +820,7 @@ mod tests {
         let mut engine = Engine::new(rules, true, None);
 
         // Input has ANSI codes around the quoted value
-        let result = engine.apply("running: \"\x1b[32mkubectl apply\x1b[0m\"");
+        let result = engine.apply("running: \"\x1b[32mkubectl apply\x1b[0m\"").unwrap();
         // Should match and style the capture group from the clean text
         assert_ne!(
             result.line, "running: \"kubectl apply\"",
@@ -826,7 +836,7 @@ mod tests {
         let rules = vec![Rule::test_with_scope("ERROR", "red", MatchScope::Line, 0)];
         let mut engine = Engine::new(rules, true, None);
 
-        let result = engine.apply("\x1b[33mERROR: something\x1b[0m");
+        let result = engine.apply("\x1b[33mERROR: something\x1b[0m").unwrap();
         // Line scope should style the whole line but the input text includes ANSI
         assert_ne!(result.line, "\x1b[33mERROR: something\x1b[0m");
     }
@@ -846,7 +856,7 @@ mod tests {
         let mut engine = Engine::new(rules, true, None);
 
         let input = "\x1b[32mbuild\x1b[0m    \x1b[90m# Build the mod\x1b[0m";
-        let result = engine.apply(input);
+        let result = engine.apply(input).unwrap();
 
         assert_eq!(result.line, input, "non-matching line must preserve raw ANSI");
     }
@@ -863,7 +873,7 @@ mod tests {
         )];
         let mut engine = Engine::new(rules, true, None);
 
-        let result = engine.apply("\x1b[33m--- PASS: TestFoo\x1b[0m");
+        let result = engine.apply("\x1b[33m--- PASS: TestFoo\x1b[0m").unwrap();
         // Original yellow wrapper must survive for the non-captured parts.
         assert!(
             result.line.contains("\x1b[33m"),
@@ -886,7 +896,7 @@ mod tests {
         let rules = vec![Rule::test_with_scope("ERROR", "red", MatchScope::Match, 0)];
         let mut engine = Engine::new(rules, true, None);
 
-        let result = engine.apply("\x1b[33mfoo ERROR bar\x1b[0m");
+        let result = engine.apply("\x1b[33mfoo ERROR bar\x1b[0m").unwrap();
         // Original yellow wrapper preserved for "foo " and " bar".
         assert!(
             result.line.contains("\x1b[33m"),
@@ -911,7 +921,7 @@ mod tests {
         let mut engine = Engine::new(rules, true, None);
 
         let input = "\x1b[32mjust some green text\x1b[0m";
-        let result = engine.apply(input);
+        let result = engine.apply(input).unwrap();
         assert_eq!(result.line, input);
     }
 
@@ -974,7 +984,7 @@ mod tests {
     fn test_apply_result_insert_before() {
         let rules = vec![crate::rules::parse_rule("ERROR::insert-before:--- alert ---", 0).unwrap()];
         let mut engine = Engine::new(rules, true, None);
-        let result = engine.apply("ERROR: something broke");
+        let result = engine.apply("ERROR: something broke").unwrap();
         assert_eq!(result.before.len(), 1);
         assert_eq!(result.before[0], "--- alert ---");
         assert_eq!(result.line, "ERROR: something broke");
@@ -985,7 +995,7 @@ mod tests {
     fn test_apply_result_insert_after() {
         let rules = vec![crate::rules::parse_rule("ERROR::insert-after:^^^ see above ^^^", 0).unwrap()];
         let mut engine = Engine::new(rules, true, None);
-        let result = engine.apply("ERROR: something broke");
+        let result = engine.apply("ERROR: something broke").unwrap();
         assert!(result.before.is_empty());
         assert_eq!(result.line, "ERROR: something broke");
         assert_eq!(result.after.len(), 1);
@@ -996,7 +1006,7 @@ mod tests {
     fn test_apply_result_prepend() {
         let rules = vec![crate::rules::parse_rule("WARN::prepend:>> ", 0).unwrap()];
         let mut engine = Engine::new(rules, true, None);
-        let result = engine.apply("WARN: watch out");
+        let result = engine.apply("WARN: watch out").unwrap();
         assert!(result.before.is_empty());
         assert!(result.after.is_empty());
         assert!(result.line.starts_with(">> "), "line should start with '>> ', got: {}", result.line);
@@ -1007,7 +1017,7 @@ mod tests {
     fn test_apply_result_append() {
         let rules = vec![crate::rules::parse_rule("DEBUG::append: (done)", 0).unwrap()];
         let mut engine = Engine::new(rules, true, None);
-        let result = engine.apply("DEBUG: stuff");
+        let result = engine.apply("DEBUG: stuff").unwrap();
         assert!(result.before.is_empty());
         assert!(result.after.is_empty());
         assert!(result.line.starts_with("DEBUG: stuff"), "line should start with original text");
@@ -1022,7 +1032,7 @@ mod tests {
             crate::rules::parse_rule("ERROR::insert-before:---", 1).unwrap(),
         ];
         let mut engine = Engine::new(rules, true, None);
-        let result = engine.apply("ERROR: broke");
+        let result = engine.apply("ERROR: broke").unwrap();
         assert_eq!(result.before.len(), 1);
         assert_eq!(result.before[0], "---");
         // The main line should be styled (not plain)
@@ -1033,7 +1043,7 @@ mod tests {
     fn test_apply_result_no_match_empty_vecs() {
         let rules = vec![crate::rules::parse_rule("ERROR::insert-before:---", 0).unwrap()];
         let mut engine = Engine::new(rules, true, None);
-        let result = engine.apply("just a normal line");
+        let result = engine.apply("just a normal line").unwrap();
         assert!(result.before.is_empty());
         assert_eq!(result.line, "just a normal line");
         assert!(result.after.is_empty());
@@ -1044,7 +1054,7 @@ mod tests {
         // color_enabled=false, but insert rules should still fire (rendering plain text)
         let rules = vec![crate::rules::parse_rule("ERROR::insert-before:--- alert ---", 0).unwrap()];
         let mut engine = Engine::new(rules, false, None);
-        let result = engine.apply("ERROR: broke");
+        let result = engine.apply("ERROR: broke").unwrap();
         assert_eq!(result.before.len(), 1, "insert-before should still fire in plain mode");
         assert_eq!(result.before[0], "--- alert ---");
         assert_eq!(result.line, "ERROR: broke");
@@ -1069,8 +1079,8 @@ mod tests {
             crate::rules::parse_rule("DATA::prepend:>> ", 1).unwrap(),
         ];
         let mut engine = Engine::new(rules, true, None);
-        engine.apply("TRIGGER"); // activate next(1)
-        let result = engine.apply("DATA here");
+        engine.apply("TRIGGER").unwrap(); // activate next(1)
+        let result = engine.apply("DATA here").unwrap();
         // The prepended ">> " should be plain (no cyan styling from carry-forward)
         assert!(result.line.starts_with(">> "), "should have prepend, got: {}", result.line);
     }
@@ -1093,13 +1103,49 @@ mod tests {
         };
 
         let mut engine = Engine::new(vec![], true, Some(md()));
-        engine.apply("- a list item");
-        engine.apply("");
-        let after_list = engine.apply("Plain paragraph text").line;
+        engine.apply("- a list item").unwrap();
+        engine.apply("").unwrap();
+        let after_list = engine.apply("Plain paragraph text").unwrap().line;
 
         let mut fresh = Engine::new(vec![], true, Some(md()));
-        let expected = fresh.apply("Plain paragraph text").line;
+        let expected = fresh.apply("Plain paragraph text").unwrap().line;
 
         assert_eq!(after_list, expected);
+    }
+
+    #[test]
+    fn matching_errors_propagate_for_every_scope() {
+        use fancy_regex::{Error, RegexBuilder, RuntimeError};
+
+        let pattern = "(x+x+)+(?>y)";
+        let template = InsertTemplate {
+            template: "$0".into(),
+            segments: markup::validate_template("$0", 2).unwrap(),
+        };
+        let scopes = [
+            MatchScope::Line,
+            MatchScope::Match,
+            MatchScope::Capture(1),
+            MatchScope::Next(1),
+            MatchScope::InsertBefore(template.clone()),
+            MatchScope::InsertAfter(template.clone()),
+            MatchScope::Prepend(template.clone()),
+            MatchScope::Append(template),
+        ];
+        for scope in scopes {
+            let rule = Rule {
+                pattern: RegexBuilder::new(pattern).backtrack_limit(1).build().unwrap(),
+                style: Style::new(),
+                scope,
+                priority: 0,
+            };
+            let mut engine = Engine::new(vec![rule], true, None);
+            let err = engine.apply("xxxxxxxxxxy").err().expect("matching must fail");
+            assert!(matches!(
+                err.downcast_ref::<Error>(),
+                Some(Error::RuntimeError(RuntimeError::BacktrackLimitExceeded))
+            ));
+            assert!(err.to_string().contains(pattern));
+        }
     }
 }

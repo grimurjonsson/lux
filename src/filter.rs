@@ -1,4 +1,5 @@
-use regex::Regex;
+use anyhow::Context;
+use fancy_regex::Regex;
 
 /// A line filter that decides whether to show or hide lines based on
 /// include/exclude regex patterns, with optional ANSI code stripping.
@@ -43,17 +44,28 @@ impl LineFilter {
     }
 
     /// Returns true if the line should be shown (passes the filter).
-    pub fn should_show(&self, line: &str) -> bool {
+    pub fn should_show(&self, line: &str) -> anyhow::Result<bool> {
         let text = if self.strip_ansi {
             crate::trigger::strip_ansi(line)
         } else {
             line.to_string()
         };
 
-        let pass_include =
-            self.include.is_empty() || self.include.iter().any(|r| r.is_match(&text));
-        let pass_exclude = self.exclude.iter().all(|r| !r.is_match(&text));
-        pass_include && pass_exclude
+        let mut pass_include = self.include.is_empty();
+        for pattern in &self.include {
+            if pattern.is_match(&text)
+                .with_context(|| format!("matching include pattern '{}'", pattern.as_str()))? {
+                pass_include = true;
+                break;
+            }
+        }
+        for pattern in &self.exclude {
+            if pattern.is_match(&text)
+                .with_context(|| format!("matching exclude pattern '{}'", pattern.as_str()))? {
+                return Ok(false);
+            }
+        }
+        Ok(pass_include)
     }
 }
 
@@ -69,67 +81,67 @@ mod tests {
     fn no_patterns_passes_all() {
         let f = LineFilter::new(&[], &[], false).unwrap();
         assert!(!f.is_active());
-        assert!(f.should_show("anything"));
-        assert!(f.should_show("ERROR: bad"));
-        assert!(f.should_show(""));
+        assert!(f.should_show("anything").unwrap());
+        assert!(f.should_show("ERROR: bad").unwrap());
+        assert!(f.should_show("").unwrap());
     }
 
     #[test]
     fn include_only_matching() {
         let f = LineFilter::new(&s(&["ERROR"]), &[], false).unwrap();
         assert!(f.is_active());
-        assert!(f.should_show("ERROR: something broke"));
-        assert!(!f.should_show("WARN: caution"));
-        assert!(!f.should_show("DEBUG: verbose"));
+        assert!(f.should_show("ERROR: something broke").unwrap());
+        assert!(!f.should_show("WARN: caution").unwrap());
+        assert!(!f.should_show("DEBUG: verbose").unwrap());
     }
 
     #[test]
     fn exclude_hides_matching() {
         let f = LineFilter::new(&[], &s(&["DEBUG"]), false).unwrap();
         assert!(f.is_active());
-        assert!(f.should_show("ERROR: bad"));
-        assert!(f.should_show("WARN: caution"));
-        assert!(!f.should_show("DEBUG: verbose"));
+        assert!(f.should_show("ERROR: bad").unwrap());
+        assert!(f.should_show("WARN: caution").unwrap());
+        assert!(!f.should_show("DEBUG: verbose").unwrap());
     }
 
     #[test]
     fn multiple_includes_or() {
         let f = LineFilter::new(&s(&["ERROR", "WARN"]), &[], false).unwrap();
-        assert!(f.should_show("ERROR: bad"));
-        assert!(f.should_show("WARN: caution"));
-        assert!(!f.should_show("DEBUG: verbose"));
-        assert!(!f.should_show("INFO: normal"));
+        assert!(f.should_show("ERROR: bad").unwrap());
+        assert!(f.should_show("WARN: caution").unwrap());
+        assert!(!f.should_show("DEBUG: verbose").unwrap());
+        assert!(!f.should_show("INFO: normal").unwrap());
     }
 
     #[test]
     fn multiple_excludes_all_apply() {
         let f = LineFilter::new(&[], &s(&["DEBUG", "TRACE"]), false).unwrap();
-        assert!(f.should_show("ERROR: bad"));
-        assert!(!f.should_show("DEBUG: verbose"));
-        assert!(!f.should_show("TRACE: detailed"));
+        assert!(f.should_show("ERROR: bad").unwrap());
+        assert!(!f.should_show("DEBUG: verbose").unwrap());
+        assert!(!f.should_show("TRACE: detailed").unwrap());
     }
 
     #[test]
     fn include_exclude_combo() {
         let f = LineFilter::new(&s(&["ERROR|WARN"]), &s(&["timeout"]), false).unwrap();
-        assert!(f.should_show("ERROR: disk"));
-        assert!(!f.should_show("ERROR: timeout"));
-        assert!(f.should_show("WARN: memory"));
-        assert!(!f.should_show("WARN: timeout issue"));
-        assert!(!f.should_show("DEBUG: normal"));
+        assert!(f.should_show("ERROR: disk").unwrap());
+        assert!(!f.should_show("ERROR: timeout").unwrap());
+        assert!(f.should_show("WARN: memory").unwrap());
+        assert!(!f.should_show("WARN: timeout issue").unwrap());
+        assert!(!f.should_show("DEBUG: normal").unwrap());
     }
 
     #[test]
     fn strip_ansi_before_matching() {
         let f = LineFilter::new(&s(&["ERROR"]), &[], true).unwrap();
-        assert!(f.should_show("\x1b[31mERROR\x1b[0m: something"));
-        assert!(!f.should_show("\x1b[33mWARN\x1b[0m: something"));
+        assert!(f.should_show("\x1b[31mERROR\x1b[0m: something").unwrap());
+        assert!(!f.should_show("\x1b[33mWARN\x1b[0m: something").unwrap());
     }
 
     #[test]
     fn ansi_line_matches_include() {
         let f = LineFilter::new(&s(&["ERROR"]), &[], true).unwrap();
-        assert!(f.should_show("\x1b[31mERROR\x1b[0m"));
+        assert!(f.should_show("\x1b[31mERROR\x1b[0m").unwrap());
     }
 
     #[test]
@@ -137,11 +149,11 @@ mod tests {
         let f = LineFilter::new(&s(&["ERROR"]), &[], false).unwrap();
         // Without stripping, the raw text contains ANSI codes around ERROR
         // but the text "ERROR" is still present in the raw string
-        assert!(f.should_show("\x1b[31mERROR\x1b[0m"));
+        assert!(f.should_show("\x1b[31mERROR\x1b[0m").unwrap());
         // Pattern that only matches clean text should still find ERROR in raw
         let f2 = LineFilter::new(&s(&["^ERROR$"]), &[], false).unwrap();
         // This should NOT match because raw input has ANSI codes
-        assert!(!f2.should_show("\x1b[31mERROR\x1b[0m"));
+        assert!(!f2.should_show("\x1b[31mERROR\x1b[0m").unwrap());
     }
 
     #[test]

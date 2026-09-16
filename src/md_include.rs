@@ -109,7 +109,7 @@ pub fn render_root(
     root_path: &Path,
     engine: &mut Engine,
     ctx: &IncludeCtx,
-) -> Vec<String> {
+) -> anyhow::Result<Vec<String>> {
     let base_dir = root_path.parent().unwrap_or(Path::new(".")).to_path_buf();
     let mut visited = vec![canonical(root_path)];
     render_lines(lines, &base_dir, 0, &mut visited, engine, ctx)
@@ -129,21 +129,23 @@ fn render_lines(
     visited: &mut Vec<PathBuf>,
     engine: &mut Engine,
     ctx: &IncludeCtx,
-) -> Vec<String> {
+) -> anyhow::Result<Vec<String>> {
     let mut out = Vec::new();
     let mut table: Option<TableAssembler> =
         ctx.color_enabled.then(TableAssembler::new);
     let mut in_fence = false;
 
-    let emit_engine = |out: &mut Vec<String>, engine: &mut Engine, raw: &str| {
-        out.extend(engine.apply(raw).flatten());
+    let emit_engine = |out: &mut Vec<String>, engine: &mut Engine, raw: &str| -> anyhow::Result<()> {
+        out.extend(engine.apply(raw)?.flatten());
+        Ok(())
     };
-    let flush_table = |out: &mut Vec<String>, engine: &mut Engine, t: &mut TableAssembler| {
+    let flush_table = |out: &mut Vec<String>, engine: &mut Engine, t: &mut TableAssembler| -> anyhow::Result<()> {
         match t.flush() {
             FlushResult::Nothing => {}
-            FlushResult::Raw(raw) => out.extend(engine.apply(&raw).flatten()),
+            FlushResult::Raw(raw) => out.extend(engine.apply(&raw)?.flatten()),
             FlushResult::Table(rendered) => out.extend(rendered),
         }
+        Ok(())
     };
 
     for line in lines {
@@ -161,29 +163,29 @@ fn render_lines(
         if !in_fence && !toggled
             && let Some(ref_path) = detect_ref(raw) {
             if let Some(t) = table.as_mut() {
-                flush_table(&mut out, engine, t);
+                flush_table(&mut out, engine, t)?;
             }
-            out.extend(render_included(ref_path, base_dir, depth + 1, visited, engine, ctx));
+            out.extend(render_included(ref_path, base_dir, depth + 1, visited, engine, ctx)?);
             continue;
         }
 
-        if ctx.filter.is_active() && !ctx.filter.should_show(raw) {
+        if ctx.filter.is_active() && !ctx.filter.should_show(raw)? {
             continue;
         }
 
         match table.as_mut() {
-            None => emit_engine(&mut out, engine, raw),
+            None => emit_engine(&mut out, engine, raw)?,
             Some(t) => match t.feed(raw) {
                 FeedResult::Pass(raws) => {
                     for r in raws {
-                        emit_engine(&mut out, engine, &r);
+                        emit_engine(&mut out, engine, &r)?;
                     }
                 }
                 FeedResult::Buffered => {}
                 FeedResult::Table { rendered, trailing } => {
                     out.extend(rendered);
                     if let Some(r) = trailing {
-                        emit_engine(&mut out, engine, &r);
+                        emit_engine(&mut out, engine, &r)?;
                     }
                 }
             },
@@ -191,9 +193,9 @@ fn render_lines(
     }
 
     if let Some(t) = table.as_mut() {
-        flush_table(&mut out, engine, t);
+        flush_table(&mut out, engine, t)?;
     }
-    out
+    Ok(out)
 }
 
 /// Render one `@ref`: checks (missing/cycle/depth) → note line, otherwise
@@ -205,7 +207,7 @@ fn render_included(
     visited: &mut Vec<PathBuf>,
     engine: &mut Engine,
     ctx: &IncludeCtx,
-) -> Vec<String> {
+) -> anyhow::Result<Vec<String>> {
     let resolved = if Path::new(path_as_written).is_absolute() {
         PathBuf::from(path_as_written)
     } else {
@@ -213,16 +215,16 @@ fn render_included(
     };
 
     if depth > MAX_DEPTH {
-        return vec![note_line(path_as_written, "skipped: max include depth", depth, ctx.color_enabled)];
+        return Ok(vec![note_line(path_as_written, "skipped: max include depth", depth, ctx.color_enabled)]);
     }
     let canon = canonical(&resolved);
     if visited.contains(&canon) {
-        return vec![note_line(path_as_written, "skipped: already included above", depth, ctx.color_enabled)];
+        return Ok(vec![note_line(path_as_written, "skipped: already included above", depth, ctx.color_enabled)]);
     }
     let content = match std::fs::read_to_string(&resolved) {
         Ok(c) => c,
         Err(_) => {
-            return vec![note_line(path_as_written, "not found", depth, ctx.color_enabled)];
+            return Ok(vec![note_line(path_as_written, "not found", depth, ctx.color_enabled)]);
         }
     };
 
@@ -231,13 +233,14 @@ fn render_included(
     let child_base = resolved.parent().unwrap_or(Path::new(".")).to_path_buf();
     let rendered = render_lines(&child_lines, &child_base, depth, visited, engine, ctx);
     visited.pop();
+    let rendered = rendered?;
 
     let g = gutter(depth, ctx.color_enabled);
     let mut out = Vec::with_capacity(rendered.len() + 2);
     out.push(header_line(path_as_written, depth, ctx.color_enabled));
     out.extend(rendered.into_iter().map(|l| format!("{g}{l}")));
     out.push(footer_line(depth, ctx.color_enabled));
-    out
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -337,7 +340,7 @@ mod tests {
             .lines()
             .map(String::from)
             .collect();
-        render_root(&lines, &root_path, &mut engine, &ctx)
+        render_root(&lines, &root_path, &mut engine, &ctx).unwrap()
             .iter()
             .map(|l| strip_ansi(l))
             .collect()
@@ -466,7 +469,7 @@ mod tests {
         let mut engine = Engine::new(vec![], false, None);
         let root_path = dir.path().join("root.md");
         let lines = vec!["@child.md".to_string()];
-        let out: Vec<String> = render_root(&lines, &root_path, &mut engine, &ctx)
+        let out: Vec<String> = render_root(&lines, &root_path, &mut engine, &ctx).unwrap()
             .iter().map(|l| strip_ansi(l)).collect();
         assert!(out.contains(&"│ keep this".to_string()));
         assert!(!out.iter().any(|l| l.contains("drop this")));
