@@ -252,6 +252,41 @@ style = "blue"
 }
 
 #[test]
+fn cli_rule_replaces_same_pattern_profile_and_global_rules() {
+    let tmp = TempDir::new().unwrap();
+    let config_path = write_config(
+        &tmp,
+        r#"
+[[rules]]
+pattern = "ERROR"
+style = "yellow"
+[profiles.check]
+[[profiles.check.rules]]
+pattern = "ERROR"
+style = "red"
+scope = "line"
+[[profiles.check.rules]]
+pattern = "ERROR"
+style = ""
+scope = "append"
+text = " unwanted"
+[[profiles.check.rules]]
+pattern = "WARN"
+style = "blue"
+"#,
+    );
+    lux()
+        .current_dir(tmp.path())
+        .env_remove("NO_COLOR")
+        .args(["--config", config_path.to_str().unwrap(), "--color", "always",
+            "-p", "check", "-r", "ERROR:green:match"])
+        .write_stdin("ERROR tail\nWARN tail\n")
+        .assert()
+        .success()
+        .stdout("\x1b[32mERROR\x1b[0m tail\n\x1b[34mWARN tail\x1b[0m\n");
+}
+
+#[test]
 fn lookahead_rules_preserve_match_boundaries_and_capture_templates() {
     let tmp = TempDir::new().unwrap();
     let config_path = write_config(&tmp, "");

@@ -245,13 +245,15 @@ pub fn build_rules(cli_rules: &[String]) -> Result<Vec<Rule>> {
     Ok(rules)
 }
 
-/// Build the complete rule set from CLI rules, config file rules, profile rules, and defaults.
+/// Build the complete rule set from CLI rules, profile rules, and global config rules.
 ///
 /// Priority layering (lower number = higher priority):
 /// 1. CLI rules (priority 0+)
-/// 2. Global config rules (next band)
-/// 3. Profile rules (next band, if profile active)
-/// 4. Default rules (highest priority numbers)
+/// 2. Profile rules (next band, if profile active)
+/// 3. Global config rules (next band)
+///
+/// CLI rules replace all profile/global rules with the exact same pattern,
+/// including their scopes and insertion templates. Unrelated rules remain active.
 ///
 /// The `merged_profiles` parameter allows passing pre-merged profiles (user + built-in)
 /// so that built-in profiles like "markdown" work without a config file.
@@ -268,6 +270,7 @@ pub fn build_rules_with_config(
         rules.push(parse_rule(rule_str, i)?);
     }
 
+    let cli_rule_count = rules.len();
     let mut offset = rules.len();
 
     // Profile rules -- higher priority than global rules so profile styling wins
@@ -281,6 +284,12 @@ pub fn build_rules_with_config(
         match profile {
             Some(p) => {
                 for rc in &p.rules {
+                    if rules[..cli_rule_count]
+                        .iter()
+                        .any(|rule| rule.pattern.as_str() == rc.pattern)
+                    {
+                        continue;
+                    }
                     let rule = if let Some(ref text) = rc.text {
                         rule_from_config_with_text(&rc.pattern, &rc.style, &rc.scope, text, offset)?
                     } else {
@@ -319,6 +328,12 @@ pub fn build_rules_with_config(
     // Global config rules -- lower priority than profile rules
     if let Some(cfg) = config {
         for rc in &cfg.rules {
+            if rules[..cli_rule_count]
+                .iter()
+                .any(|rule| rule.pattern.as_str() == rc.pattern)
+            {
+                continue;
+            }
             let rule = if let Some(ref text) = rc.text {
                 rule_from_config_with_text(&rc.pattern, &rc.style, &rc.scope, text, offset)?
             } else {

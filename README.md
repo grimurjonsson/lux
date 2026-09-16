@@ -151,6 +151,16 @@ Ordinary patterns use the fast regex engine; advanced patterns may backtrack.
 If a pattern exceeds the backtracking limit, lux reports an error rather than
 silently skipping the match.
 
+CLI rules have priority over profile rules, which have priority over global
+config rules. A `-r` rule **replaces every profile/global rule with the exact
+same pattern string**, including its old scope and insertion template.
+Unrelated rules remain active; repeated CLI rules remain additive, with the
+first winning overlapping colors.
+
+For example, if your profile colors whole `ERROR` lines red, `-r 'ERROR:green:match'`
+instead colors only `ERROR` green, without retaining the profile's line coloring.
+Pattern identity is textual: `ERROR` and `(?i)error` are different patterns.
+
 <p align="center">
   <img src="assets/rules.gif" alt="lux custom rules demo" width="800">
 </p>
