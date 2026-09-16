@@ -5,6 +5,16 @@ All notable changes to lux will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.21] - 2026-09-16
+Adds lookaround support in user regex patterns, lets CLI rules override config rules with the same pattern, and streamlines the grouped CLI help output.
+
+### Added
+- streamline grouped CLI help and refresh dependencies
+- support lookaround in user regex patterns
+
+### Fixed
+- replace same-pattern config rules with CLI rules
+
 ## [Unreleased]
 
 ### Added
