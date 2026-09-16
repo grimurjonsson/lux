@@ -969,6 +969,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "crossterm 0.28.1",
+ "fancy-regex 0.16.2",
  "libc",
  "notify",
  "owo-colors",

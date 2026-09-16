@@ -5,6 +5,11 @@ All notable changes to lux will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Support lookaround in user regex patterns, including rules, filters, triggers, context boundaries, and profile wizard validation/previews. Report regex execution failures with pattern context.
+
 ## [0.1.20] - 2026-09-03
 Fenced code blocks in markdown are now syntax-highlighted using the language named in the fence.
 

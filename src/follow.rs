@@ -70,14 +70,14 @@ fn read_new_lines(
         let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
         // Apply line filter before coloring and trigger processing
         if let Some(f) = filter {
-            if f.is_active() && !f.should_show(trimmed) {
+            if f.is_active() && !f.should_show(trimmed)? {
                 count += 1;
                 continue;
             }
         }
         if let Some(ref mut tf) = trigger {
-            let result = engine.apply(trimmed);
-            match tf.process_line(trimmed, result.flatten()) {
+            let result = engine.apply(trimmed)?;
+            match tf.process_line(trimmed, result.flatten())? {
                 OutputDecision::Pass(out_lines) => {
                     for l in out_lines {
                         if let Some(ref mut ann) = slow {
@@ -105,7 +105,7 @@ fn read_new_lines(
         } else {
             match table.as_deref_mut() {
                 None => {
-                    let result = engine.apply(trimmed);
+                    let result = engine.apply(trimmed)?;
                     for l in &result.before {
                         writeln!(writer, "{l}")?;
                     }
@@ -123,7 +123,7 @@ fn read_new_lines(
                 Some(t) => match t.feed(trimmed) {
                     FeedResult::Pass(raw_lines) => {
                         for raw in raw_lines {
-                            let result = engine.apply(&raw);
+                            let result = engine.apply(&raw)?;
                             for l in result.flatten() {
                                 writeln!(writer, "{l}")?;
                             }
@@ -135,7 +135,7 @@ fn read_new_lines(
                             writeln!(writer, "{l}")?;
                         }
                         if let Some(raw) = trailing {
-                            let result = engine.apply(&raw);
+                            let result = engine.apply(&raw)?;
                             for l in result.flatten() {
                                 writeln!(writer, "{l}")?;
                             }
@@ -299,7 +299,7 @@ pub fn run(
                     match t.flush() {
                         FlushResult::Nothing => {}
                         FlushResult::Raw(raw) => {
-                            let result = engine.apply(&raw);
+                            let result = engine.apply(&raw)?;
                             for l in result.flatten() {
                                 writeln!(writer, "{l}")?;
                             }

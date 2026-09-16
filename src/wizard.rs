@@ -1,7 +1,8 @@
 use std::io::{self, BufRead, Write};
 use std::path::Path;
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
+use fancy_regex::Regex;
 use owo_colors::OwoColorize;
 
 use crate::color;
@@ -96,7 +97,7 @@ fn run_wizard(
             break;
         }
         // Validate regex
-        if let Err(e) = regex::Regex::new(&t) {
+        if let Err(e) = Regex::new(&t) {
             writeln!(out, "  {} {e}", "invalid regex:".red())?;
             continue;
         }
@@ -352,7 +353,7 @@ fn run_edit(
             continue;
         }
         if !input.is_empty() {
-            if let Err(e) = regex::Regex::new(&input) {
+            if let Err(e) = Regex::new(&input) {
                 writeln!(out, "  {} {e} — keeping original", "invalid regex:".red())?;
                 triggers.push(existing.clone());
             } else {
@@ -366,7 +367,7 @@ fn run_edit(
         if t.is_empty() {
             break;
         }
-        if let Err(e) = regex::Regex::new(&t) {
+        if let Err(e) = Regex::new(&t) {
             writeln!(out, "  {} {e}", "invalid regex:".red())?;
             continue;
         }
@@ -562,7 +563,7 @@ fn ask_rule_interactive_inner(
     prefill_pattern: Option<&str>,
 ) -> Result<Option<(String, String, String)>> {
     // 1. Pattern
-    let pattern = loop {
+    let (pattern, regex) = loop {
         let input = ask(
             reader,
             out,
@@ -572,8 +573,8 @@ fn ask_rule_interactive_inner(
         if input.is_empty() {
             return Ok(None);
         }
-        match regex::Regex::new(&input) {
-            Ok(_) => break input,
+        match Regex::new(&input) {
+            Ok(regex) => break (input, regex),
             Err(e) => {
                 writeln!(out, "  {} {e}", "invalid regex:".red())?;
                 continue;
@@ -732,21 +733,20 @@ fn ask_rule_interactive_inner(
     write!(out, "  {} ", "Preview:".bold())?;
     if scope == "match" {
         // Only color the matched portion
-        if let Ok(re) = regex::Regex::new(&pattern) {
-            if let Some(m) = re.find(sample) {
-                let matched: &str = &sample[m.start()..m.end()];
-                write!(
-                    out,
-                    "{}{}{}",
-                    &sample[..m.start()],
-                    matched.to_string().style(style),
-                    &sample[m.end()..],
-                )?;
-            } else {
-                write!(out, "{}", sample.style(style))?;
-            }
+        if let Some(m) = regex
+            .find(sample)
+            .with_context(|| format!("failed to match preview pattern '{pattern}'"))?
+        {
+            let matched = m.as_str();
+            write!(
+                out,
+                "{}{}{}",
+                &sample[..m.start()],
+                matched.style(style),
+                &sample[m.end()..],
+            )?;
         } else {
-            write!(out, "{}", sample.style(style))?;
+            write!(out, "{sample} (pattern does not match sample)")?;
         }
     } else {
         write!(out, "{}", sample.style(style))?;
@@ -870,7 +870,7 @@ fn validate_context_spec(spec: &str, out: &mut impl Write) -> bool {
         return true;
     }
     // Otherwise must be valid regex
-    if let Err(e) = regex::Regex::new(spec) {
+    if let Err(e) = Regex::new(spec) {
         let _ = writeln!(out, "  {} {e}", "warning: invalid regex:".yellow());
         return false;
     }

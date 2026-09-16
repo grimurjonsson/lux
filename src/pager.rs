@@ -43,7 +43,7 @@ pub fn run(
     table: Option<&mut TableAssembler>,
 ) -> Result<()> {
     // Apply filter + engine + trigger to produce colorized ANSI lines
-    let colored_lines = colorize_lines(raw_lines, engine, filter, trigger, table);
+    let colored_lines = colorize_lines(raw_lines, engine, filter, trigger, table)?;
     let tui_lines = to_tui_lines(&colored_lines);
     display(file_path, profile_name, rule_count, tui_lines)
 }
@@ -106,16 +106,16 @@ fn colorize_lines(
     filter: &LineFilter,
     trigger: &mut TriggerFilter,
     mut table: Option<&mut TableAssembler>,
-) -> Vec<String> {
+) -> Result<Vec<String>> {
     let mut result = Vec::new();
 
     if trigger.is_active() {
         for line in raw_lines {
-            if filter.is_active() && !filter.should_show(line) {
+            if filter.is_active() && !filter.should_show(line)? {
                 continue;
             }
-            let apply_result = engine.apply(line);
-            match trigger.process_line(line, apply_result.flatten()) {
+            let apply_result = engine.apply(line)?;
+            match trigger.process_line(line, apply_result.flatten())? {
                 OutputDecision::Pass(v) => result.extend(v),
                 OutputDecision::Flush(lines) => result.extend(lines),
                 OutputDecision::Suppress => {}
@@ -123,22 +123,22 @@ fn colorize_lines(
         }
     } else {
         for line in raw_lines {
-            if filter.is_active() && !filter.should_show(line) {
+            if filter.is_active() && !filter.should_show(line)? {
                 continue;
             }
             match table.as_deref_mut() {
-                None => result.extend(engine.apply(line).flatten()),
+                None => result.extend(engine.apply(line)?.flatten()),
                 Some(t) => match t.feed(line) {
                     FeedResult::Pass(raw) => {
                         for r in raw {
-                            result.extend(engine.apply(&r).flatten());
+                            result.extend(engine.apply(&r)?.flatten());
                         }
                     }
                     FeedResult::Buffered => {}
                     FeedResult::Table { rendered, trailing } => {
                         result.extend(rendered);
                         if let Some(r) = trailing {
-                            result.extend(engine.apply(&r).flatten());
+                            result.extend(engine.apply(&r)?.flatten());
                         }
                     }
                 },
@@ -147,13 +147,13 @@ fn colorize_lines(
         if let Some(t) = table {
             match t.flush() {
                 FlushResult::Nothing => {}
-                FlushResult::Raw(r) => result.extend(engine.apply(&r).flatten()),
+                FlushResult::Raw(r) => result.extend(engine.apply(&r)?.flatten()),
                 FlushResult::Table(rendered) => result.extend(rendered),
             }
         }
     }
 
-    result
+    Ok(result)
 }
 
 /// Main event loop: render and handle input.
@@ -311,7 +311,7 @@ mod tests {
             "| 1 | 2 |".into(),
         ];
         let mut table = TableAssembler::new();
-        let out = colorize_lines(&lines, &mut engine, &filter, &mut trigger, Some(&mut table));
+        let out = colorize_lines(&lines, &mut engine, &filter, &mut trigger, Some(&mut table)).unwrap();
         let joined = out.join("\n");
         assert!(joined.contains('┌'), "pager should box-draw tables: {joined}");
     }

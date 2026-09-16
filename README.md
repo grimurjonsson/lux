@@ -128,6 +128,9 @@ echo "user=admin action=login" | lux -r 'admin:green:match'
 
 # Color only a capture group
 echo "time=12:34:56 msg=hello" | lux -r 'time=(\S+):cyan:cap1'
+
+# Negative lookahead: match "error", but not "error-style"
+echo "error error-style" | lux --no-profile -r 'error(?!-style):red:match'
 ```
 
 **Rule format:** `PATTERN:STYLE[:SCOPE]`
@@ -141,6 +144,12 @@ echo "time=12:34:56 msg=hello" | lux -r 'time=(\S+):cyan:cap1'
 **Styles:** `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `white`, `dim`, `bold`, `italic`, `underline`. Combine with `+`: `bold+red`. Use hex (`#ff5500`), 256-color (`208`), or `bg-color` for backgrounds.
 
 Run `lux --list-colors` to see all available colors and styles.
+
+User patterns support lookaround, including negative lookahead (`(?!...)`),
+in rules, include/exclude filters, triggers, and before/after context boundaries.
+Ordinary patterns use the fast regex engine; advanced patterns may backtrack.
+If a pattern exceeds the backtracking limit, lux reports an error rather than
+silently skipping the match.
 
 <p align="center">
   <img src="assets/rules.gif" alt="lux custom rules demo" width="800">

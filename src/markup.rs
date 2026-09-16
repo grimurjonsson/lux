@@ -1,6 +1,6 @@
 use anyhow::{bail, Result};
 use owo_colors::{OwoColorize, Style};
-use regex::Captures;
+use fancy_regex::Captures;
 
 /// A segment of parsed template text — either plain or styled.
 #[derive(Debug, Clone)]
@@ -282,13 +282,13 @@ pub fn render_template(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use regex::Regex;
+    use fancy_regex::Regex;
 
     #[test]
     fn test_interpolate_full_match() {
         let re = Regex::new(r"ERROR (\w+)").unwrap();
         let text = "ERROR auth: failed";
-        let caps = re.captures(text).unwrap();
+        let caps = re.captures(text).unwrap().unwrap();
         assert_eq!(interpolate("[$0]", &caps), "[ERROR auth]");
     }
 
@@ -296,7 +296,7 @@ mod tests {
     fn test_interpolate_capture_group() {
         let re = Regex::new(r"ERROR (\w+)").unwrap();
         let text = "ERROR auth: failed";
-        let caps = re.captures(text).unwrap();
+        let caps = re.captures(text).unwrap().unwrap();
         assert_eq!(interpolate("module=$1", &caps), "module=auth");
     }
 
@@ -304,7 +304,7 @@ mod tests {
     fn test_interpolate_dollar_escape() {
         let re = Regex::new(r"ERROR (\w+)").unwrap();
         let text = "ERROR auth: failed";
-        let caps = re.captures(text).unwrap();
+        let caps = re.captures(text).unwrap().unwrap();
         assert_eq!(interpolate("cost: $$5", &caps), "cost: $5");
     }
 
@@ -312,7 +312,7 @@ mod tests {
     fn test_interpolate_optional_group_missing() {
         let re = Regex::new(r"(a)?(b)").unwrap();
         let text = "b";
-        let caps = re.captures(text).unwrap();
+        let caps = re.captures(text).unwrap().unwrap();
         assert_eq!(interpolate("[$1][$2]", &caps), "[][b]");
     }
 
@@ -320,7 +320,7 @@ mod tests {
     fn test_interpolate_no_placeholders() {
         let re = Regex::new(r"ERROR (\w+)").unwrap();
         let text = "ERROR auth: failed";
-        let caps = re.captures(text).unwrap();
+        let caps = re.captures(text).unwrap().unwrap();
         assert_eq!(interpolate("plain text", &caps), "plain text");
     }
 
@@ -328,7 +328,7 @@ mod tests {
     fn test_interpolate_bare_dollar_at_end() {
         let re = Regex::new(r"ERROR (\w+)").unwrap();
         let text = "ERROR auth: failed";
-        let caps = re.captures(text).unwrap();
+        let caps = re.captures(text).unwrap().unwrap();
         assert_eq!(interpolate("end$", &caps), "end$");
     }
 
@@ -450,7 +450,7 @@ mod tests {
     fn test_render_template_full_pipeline() {
         let re = Regex::new(r"ERROR (\w+)").unwrap();
         let text = "ERROR auth: failed";
-        let caps = re.captures(text).unwrap();
+        let caps = re.captures(text).unwrap().unwrap();
         let template = "--- [red]$0[/] in [cyan]$1[/] ---";
         let segments = validate_template(template, re.captures_len()).unwrap();
         let rendered = render_template(&segments, &caps, None, false);

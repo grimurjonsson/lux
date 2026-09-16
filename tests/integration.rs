@@ -252,6 +252,60 @@ style = "blue"
 }
 
 #[test]
+fn lookahead_rules_preserve_match_boundaries_and_capture_templates() {
+    let tmp = TempDir::new().unwrap();
+    let config_path = write_config(&tmp, "");
+    lux()
+        .current_dir(tmp.path())
+        .env_remove("NO_COLOR")
+        .args(["--config", config_path.to_str().unwrap(), "--no-profile",
+            "--color", "always", "-r", r"(error)(?!-style):green:cap1",
+            "-r", r"(error)(?!-style)::append: ($1)"])
+        .write_stdin("error error-style\nerror-style\n")
+        .assert()
+        .success()
+        .stdout("\x1b[32merror\x1b[0m error-style (error)\nerror-style\n");
+}
+
+#[test]
+fn lookahead_next_scope_does_not_trigger_on_excluded_suffix() {
+    let tmp = TempDir::new().unwrap();
+    let config_path = write_config(&tmp, "");
+    lux()
+        .current_dir(tmp.path())
+        .env_remove("NO_COLOR")
+        .args(["--config", config_path.to_str().unwrap(), "--no-profile",
+            "--color", "always", "-r", "error(?!-style):green:next1"])
+        .write_stdin("error-style\nplain\nerror\nnext\nlast\n")
+        .assert()
+        .success()
+        .stdout("error-style\nplain\nerror\n\x1b[32mnext\x1b[0m\nlast\n");
+}
+
+#[test]
+fn lookahead_filters_and_triggers_select_only_allowed_matches() {
+    let tmp = TempDir::new().unwrap();
+    let config_path = write_config(&tmp, "");
+    lux()
+        .current_dir(tmp.path())
+        .args(["--config", config_path.to_str().unwrap(), "--no-profile",
+            "--color", "never", "--include", "error(?!-style)"])
+        .write_stdin("error-style\nerror\nplain\n")
+        .assert()
+        .success()
+        .stdout("error\n");
+    lux()
+        .current_dir(tmp.path())
+        .args(["--config", config_path.to_str().unwrap(), "--no-profile",
+            "--color", "never", "--trigger", "error(?!-style)",
+            "--before", "0", "--after", "0"])
+        .write_stdin("error-style\nerror\nplain\n")
+        .assert()
+        .success()
+        .stdout("error\n");
+}
+
+#[test]
 fn missing_profile_error() {
     let tmp = TempDir::new().unwrap();
     let config_path = write_config(

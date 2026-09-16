@@ -406,7 +406,7 @@ fn run() -> anyhow::Result<()> {
                     color_enabled: color_mode.color_enabled(),
                     filter: &filter,
                 };
-                let rendered = render_root(&lines, path, &mut engine, &ctx);
+                let rendered = render_root(&lines, path, &mut engine, &ctx)?;
                 lux::pager::run_prerendered(path, active_profile_name.as_deref(), rule_count, &rendered)?;
             } else {
                 lux::pager::run(
@@ -443,7 +443,7 @@ fn run() -> anyhow::Result<()> {
                     color_enabled: color_mode.color_enabled(),
                     filter: &filter,
                 };
-                for l in render_root(&initial_lines, path, &mut engine, &ctx) {
+                for l in render_root(&initial_lines, path, &mut engine, &ctx)? {
                     writeln!(writer, "{l}")?;
                 }
                 writer.flush()?;
@@ -491,11 +491,11 @@ fn run() -> anyhow::Result<()> {
         if trigger_filter.is_active() {
             for line in all_lines {
                 let line = line?;
-                if filter.is_active() && !filter.should_show(&line) {
+                if filter.is_active() && !filter.should_show(&line)? {
                     continue;
                 }
-                let result = engine.apply(&line);
-                match trigger_filter.process_line(&line, result.flatten()) {
+                let result = engine.apply(&line)?;
+                match trigger_filter.process_line(&line, result.flatten())? {
                     OutputDecision::Pass(lines) => {
                         for l in lines {
                             if let Some(ref mut ann) = slow_annotator {
@@ -527,12 +527,12 @@ fn run() -> anyhow::Result<()> {
         } else {
             for line in all_lines {
                 let line = line?;
-                if filter.is_active() && !filter.should_show(&line) {
+                if filter.is_active() && !filter.should_show(&line)? {
                     continue;
                 }
                 match table_assembler.as_mut() {
                     None => {
-                        let result = engine.apply(&line);
+                        let result = engine.apply(&line)?;
                         for l in &result.before {
                             writeln!(writer, "{l}")?;
                         }
@@ -550,7 +550,7 @@ fn run() -> anyhow::Result<()> {
                     Some(t) => match t.feed(&line) {
                         FeedResult::Pass(raw_lines) => {
                             for raw in raw_lines {
-                                let result = engine.apply(&raw);
+                                let result = engine.apply(&raw)?;
                                 for l in result.flatten() {
                                     writeln!(writer, "{l}")?;
                                 }
@@ -562,7 +562,7 @@ fn run() -> anyhow::Result<()> {
                                 writeln!(writer, "{l}")?;
                             }
                             if let Some(raw) = trailing {
-                                let result = engine.apply(&raw);
+                                let result = engine.apply(&raw)?;
                                 for l in result.flatten() {
                                     writeln!(writer, "{l}")?;
                                 }
@@ -586,7 +586,7 @@ fn run() -> anyhow::Result<()> {
             match t.flush() {
                 FlushResult::Nothing => {}
                 FlushResult::Raw(raw) => {
-                    let result = engine.apply(&raw);
+                    let result = engine.apply(&raw)?;
                     for l in result.flatten() {
                         writeln!(writer, "{l}")?;
                     }
@@ -638,11 +638,11 @@ fn print_lines_filtered(
 ) -> anyhow::Result<()> {
     if trigger.is_active() {
         for line in lines {
-            if filter.is_active() && !filter.should_show(line) {
+            if filter.is_active() && !filter.should_show(line)? {
                 continue;
             }
-            let result = engine.apply(line);
-            match trigger.process_line(line, result.flatten()) {
+            let result = engine.apply(line)?;
+            match trigger.process_line(line, result.flatten())? {
                 OutputDecision::Pass(out_lines) => {
                     for l in out_lines {
                         writeln!(writer, "{l}")?;
@@ -658,12 +658,12 @@ fn print_lines_filtered(
         }
     } else {
         for line in lines {
-            if filter.is_active() && !filter.should_show(line) {
+            if filter.is_active() && !filter.should_show(line)? {
                 continue;
             }
             match table.as_deref_mut() {
                 None => {
-                    let result = engine.apply(line);
+                    let result = engine.apply(line)?;
                     for l in result.flatten() {
                         writeln!(writer, "{l}")?;
                     }
@@ -671,7 +671,7 @@ fn print_lines_filtered(
                 Some(t) => match t.feed(line) {
                     FeedResult::Pass(raw_lines) => {
                         for raw in raw_lines {
-                            let result = engine.apply(&raw);
+                            let result = engine.apply(&raw)?;
                             for l in result.flatten() {
                                 writeln!(writer, "{l}")?;
                             }
@@ -683,7 +683,7 @@ fn print_lines_filtered(
                             writeln!(writer, "{l}")?;
                         }
                         if let Some(raw) = trailing {
-                            let result = engine.apply(&raw);
+                            let result = engine.apply(&raw)?;
                             for l in result.flatten() {
                                 writeln!(writer, "{l}")?;
                             }
@@ -697,7 +697,7 @@ fn print_lines_filtered(
             match t.flush() {
                 FlushResult::Nothing => {}
                 FlushResult::Raw(raw) => {
-                    let result = engine.apply(&raw);
+                    let result = engine.apply(&raw)?;
                     for l in result.flatten() {
                         writeln!(writer, "{l}")?;
                     }

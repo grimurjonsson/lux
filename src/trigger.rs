@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 
-use regex::Regex;
+use anyhow::Context;
+use fancy_regex::Regex;
 
 /// What the trigger filter decides for each line.
 #[derive(Debug, PartialEq)]
@@ -143,13 +144,19 @@ impl TriggerFilter {
     }
 
     /// Check if any trigger pattern matches the raw line.
-    fn is_trigger(&self, raw_line: &str) -> bool {
-        self.patterns.iter().any(|p| p.is_match(raw_line))
+    fn is_trigger(&self, raw_line: &str) -> anyhow::Result<bool> {
+        for pattern in &self.patterns {
+            if pattern.is_match(raw_line)
+                .with_context(|| format!("matching trigger pattern '{}'", pattern.as_str()))? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// Extract before-context from the buffer based on the before spec.
-    fn drain_before_context(&mut self) -> Vec<String> {
-        match &self.before {
+    fn drain_before_context(&mut self) -> anyhow::Result<Vec<String>> {
+        Ok(match &self.before {
             ContextBefore::Lines(_) => {
                 // Buffer already capped to N lines — drain all
                 self.buffer.drain(..).collect()
@@ -160,7 +167,8 @@ impl TriggerFilter {
                 for (i, line) in self.buffer.iter().enumerate() {
                     // Strip ANSI codes for matching (buffer holds colored lines)
                     let raw = strip_ansi(line);
-                    if re.is_match(&raw) {
+                    if re.is_match(&raw)
+                        .with_context(|| format!("matching before-context pattern '{}'", re.as_str()))? {
                         start_idx = i;
                     }
                 }
@@ -171,7 +179,7 @@ impl TriggerFilter {
                 self.buffer.clear();
                 before_lines
             }
-        }
+        })
     }
 
     /// Push a colored line into the rolling buffer, respecting capacity for count-based.
@@ -209,21 +217,21 @@ impl TriggerFilter {
     ///
     /// `raw_line` is the original text (for pattern matching).
     /// `colored_lines` is the engine-processed output (may be multiple lines due to insert rules).
-    pub fn process_line(&mut self, raw_line: &str, colored_lines: Vec<String>) -> OutputDecision {
+    pub fn process_line(&mut self, raw_line: &str, colored_lines: Vec<String>) -> anyhow::Result<OutputDecision> {
         if self.patterns.is_empty() {
-            return OutputDecision::Pass(colored_lines);
+            return Ok(OutputDecision::Pass(colored_lines));
         }
 
-        let is_match = self.is_trigger(raw_line);
+        let is_match = self.is_trigger(raw_line)?;
 
-        match &mut self.state {
+        Ok(match &mut self.state {
             State::Suppressing => {
                 if is_match {
                     let mut flush = Vec::new();
                     if self.has_emitted {
                         flush.push(self.separator());
                     }
-                    let before_lines = self.drain_before_context();
+                    let before_lines = self.drain_before_context()?;
                     flush.extend(before_lines);
                     flush.extend(colored_lines);
 
@@ -276,7 +284,8 @@ impl TriggerFilter {
                 } else {
                     // Check if this line matches the after-boundary pattern
                     let is_boundary = match &self.after {
-                        ContextAfter::Pattern(re) => re.is_match(raw_line),
+                        ContextAfter::Pattern(re) => re.is_match(raw_line)
+                            .with_context(|| format!("matching after-context pattern '{}'", re.as_str()))?,
                         _ => unreachable!(),
                     };
                     if is_boundary {
@@ -288,7 +297,7 @@ impl TriggerFilter {
                     }
                 }
             }
-        }
+        })
     }
 }
 
@@ -342,7 +351,7 @@ mod tests {
     fn empty_patterns_passthrough() {
         let mut tf = TriggerFilter::new(&[], "5", "5", false).unwrap();
         assert!(!tf.is_active());
-        let decision = tf.process_line("hello", vec!["hello".to_string()]);
+        let decision = tf.process_line("hello", vec!["hello".to_string()]).unwrap();
         assert_eq!(decision, OutputDecision::Pass(vec!["hello".to_string()]));
     }
 
@@ -356,11 +365,11 @@ mod tests {
     fn suppressing_buffers_lines() {
         let mut tf = TriggerFilter::new(&patterns(&["TRIGGER"]), "3", "2", false).unwrap();
         assert_eq!(
-            tf.process_line("line1", vec!["line1".to_string()]),
+            tf.process_line("line1", vec!["line1".to_string()]).unwrap(),
             OutputDecision::Suppress
         );
         assert_eq!(
-            tf.process_line("line2", vec!["line2".to_string()]),
+            tf.process_line("line2", vec!["line2".to_string()]).unwrap(),
             OutputDecision::Suppress
         );
     }
@@ -368,11 +377,11 @@ mod tests {
     #[test]
     fn buffer_capacity_evicts_oldest() {
         let mut tf = TriggerFilter::new(&patterns(&["TRIGGER"]), "2", "1", false).unwrap();
-        tf.process_line("line1", vec!["line1".to_string()]);
-        tf.process_line("line2", vec!["line2".to_string()]);
-        tf.process_line("line3", vec!["line3".to_string()]);
+        tf.process_line("line1", vec!["line1".to_string()]).unwrap();
+        tf.process_line("line2", vec!["line2".to_string()]).unwrap();
+        tf.process_line("line3", vec!["line3".to_string()]).unwrap();
 
-        let decision = tf.process_line("TRIGGER", vec!["TRIGGER".to_string()]);
+        let decision = tf.process_line("TRIGGER", vec!["TRIGGER".to_string()]).unwrap();
         match decision {
             OutputDecision::Flush(lines) => {
                 assert_eq!(lines, vec!["line2", "line3", "TRIGGER"]);
@@ -384,10 +393,10 @@ mod tests {
     #[test]
     fn trigger_flushes_buffer_and_trigger_line() {
         let mut tf = TriggerFilter::new(&patterns(&["ERROR"]), "3", "2", false).unwrap();
-        tf.process_line("before1", vec!["before1".to_string()]);
-        tf.process_line("before2", vec!["before2".to_string()]);
+        tf.process_line("before1", vec!["before1".to_string()]).unwrap();
+        tf.process_line("before2", vec!["before2".to_string()]).unwrap();
 
-        let decision = tf.process_line("ERROR here", vec!["ERROR here".to_string()]);
+        let decision = tf.process_line("ERROR here", vec!["ERROR here".to_string()]).unwrap();
         match decision {
             OutputDecision::Flush(lines) => {
                 assert_eq!(lines, vec!["before1", "before2", "ERROR here"]);
@@ -399,18 +408,18 @@ mod tests {
     #[test]
     fn after_window_countdown() {
         let mut tf = TriggerFilter::new(&patterns(&["ERROR"]), "1", "2", false).unwrap();
-        tf.process_line("ERROR", vec!["ERROR".to_string()]);
+        tf.process_line("ERROR", vec!["ERROR".to_string()]).unwrap();
 
         assert_eq!(
-            tf.process_line("after1", vec!["after1".to_string()]),
+            tf.process_line("after1", vec!["after1".to_string()]).unwrap(),
             OutputDecision::Pass(vec!["after1".to_string()])
         );
         assert_eq!(
-            tf.process_line("after2", vec!["after2".to_string()]),
+            tf.process_line("after2", vec!["after2".to_string()]).unwrap(),
             OutputDecision::Pass(vec!["after2".to_string()])
         );
         assert_eq!(
-            tf.process_line("suppressed", vec!["suppressed".to_string()]),
+            tf.process_line("suppressed", vec!["suppressed".to_string()]).unwrap(),
             OutputDecision::Suppress
         );
     }
@@ -418,19 +427,19 @@ mod tests {
     #[test]
     fn retrigger_resets_after_counter() {
         let mut tf = TriggerFilter::new(&patterns(&["ERROR"]), "1", "2", false).unwrap();
-        tf.process_line("ERROR first", vec!["ERROR first".to_string()]);
-        tf.process_line("after1", vec!["after1".to_string()]);
-        tf.process_line("ERROR second", vec!["ERROR second".to_string()]);
+        tf.process_line("ERROR first", vec!["ERROR first".to_string()]).unwrap();
+        tf.process_line("after1", vec!["after1".to_string()]).unwrap();
+        tf.process_line("ERROR second", vec!["ERROR second".to_string()]).unwrap();
         assert_eq!(
-            tf.process_line("new-after1", vec!["new-after1".to_string()]),
+            tf.process_line("new-after1", vec!["new-after1".to_string()]).unwrap(),
             OutputDecision::Pass(vec!["new-after1".to_string()])
         );
         assert_eq!(
-            tf.process_line("new-after2", vec!["new-after2".to_string()]),
+            tf.process_line("new-after2", vec!["new-after2".to_string()]).unwrap(),
             OutputDecision::Pass(vec!["new-after2".to_string()])
         );
         assert_eq!(
-            tf.process_line("gone", vec!["gone".to_string()]),
+            tf.process_line("gone", vec!["gone".to_string()]).unwrap(),
             OutputDecision::Suppress
         );
     }
@@ -439,8 +448,8 @@ mod tests {
     fn separator_between_trigger_groups() {
         let mut tf = TriggerFilter::new(&patterns(&["TRIGGER"]), "1", "0", false).unwrap();
 
-        tf.process_line("ctx1", vec!["ctx1".to_string()]);
-        let first = tf.process_line("TRIGGER one", vec!["TRIGGER one".to_string()]);
+        tf.process_line("ctx1", vec!["ctx1".to_string()]).unwrap();
+        let first = tf.process_line("TRIGGER one", vec!["TRIGGER one".to_string()]).unwrap();
         match first {
             OutputDecision::Flush(lines) => {
                 assert!(lines.iter().all(|l| !l.contains("--- lux ---")));
@@ -449,8 +458,8 @@ mod tests {
             other => panic!("Expected Flush, got {:?}", other),
         }
 
-        tf.process_line("ctx2", vec!["ctx2".to_string()]);
-        let second = tf.process_line("TRIGGER two", vec!["TRIGGER two".to_string()]);
+        tf.process_line("ctx2", vec!["ctx2".to_string()]).unwrap();
+        let second = tf.process_line("TRIGGER two", vec!["TRIGGER two".to_string()]).unwrap();
         match second {
             OutputDecision::Flush(lines) => {
                 assert!(lines[0].contains("--- lux ---"), "separator should contain label");
@@ -466,10 +475,10 @@ mod tests {
     fn multiple_patterns_or() {
         let mut tf = TriggerFilter::new(&patterns(&["ERROR", "WARN"]), "0", "0", false).unwrap();
 
-        let d1 = tf.process_line("ERROR here", vec!["ERROR here".to_string()]);
+        let d1 = tf.process_line("ERROR here", vec!["ERROR here".to_string()]).unwrap();
         assert!(matches!(d1, OutputDecision::Flush(_)));
 
-        let d2 = tf.process_line("WARN here", vec!["WARN here".to_string()]);
+        let d2 = tf.process_line("WARN here", vec!["WARN here".to_string()]).unwrap();
         assert!(matches!(d2, OutputDecision::Flush(_)));
     }
 
@@ -477,7 +486,7 @@ mod tests {
     fn raw_line_used_for_matching() {
         let mut tf = TriggerFilter::new(&patterns(&["ERROR"]), "0", "0", false).unwrap();
         let decision =
-            tf.process_line("ERROR here", vec!["\x1b[31mERROR here\x1b[0m".to_string()]);
+            tf.process_line("ERROR here", vec!["\x1b[31mERROR here\x1b[0m".to_string()]).unwrap();
         match decision {
             OutputDecision::Flush(lines) => {
                 assert_eq!(lines, vec!["\x1b[31mERROR here\x1b[0m"]);
@@ -499,11 +508,11 @@ mod tests {
         let mut tf =
             TriggerFilter::new(&patterns(&["ERROR"]), "^===", "0", false).unwrap();
 
-        tf.process_line("old stuff", vec!["old stuff".to_string()]);
-        tf.process_line("=== START", vec!["=== START".to_string()]);
-        tf.process_line("context line", vec!["context line".to_string()]);
+        tf.process_line("old stuff", vec!["old stuff".to_string()]).unwrap();
+        tf.process_line("=== START", vec!["=== START".to_string()]).unwrap();
+        tf.process_line("context line", vec!["context line".to_string()]).unwrap();
 
-        let decision = tf.process_line("ERROR boom", vec!["ERROR boom".to_string()]);
+        let decision = tf.process_line("ERROR boom", vec!["ERROR boom".to_string()]).unwrap();
         match decision {
             OutputDecision::Flush(lines) => {
                 assert_eq!(
@@ -520,12 +529,12 @@ mod tests {
         let mut tf =
             TriggerFilter::new(&patterns(&["ERROR"]), "^===", "0", false).unwrap();
 
-        tf.process_line("=== FIRST", vec!["=== FIRST".to_string()]);
-        tf.process_line("middle", vec!["middle".to_string()]);
-        tf.process_line("=== SECOND", vec!["=== SECOND".to_string()]);
-        tf.process_line("context", vec!["context".to_string()]);
+        tf.process_line("=== FIRST", vec!["=== FIRST".to_string()]).unwrap();
+        tf.process_line("middle", vec!["middle".to_string()]).unwrap();
+        tf.process_line("=== SECOND", vec!["=== SECOND".to_string()]).unwrap();
+        tf.process_line("context", vec!["context".to_string()]).unwrap();
 
-        let decision = tf.process_line("ERROR", vec!["ERROR".to_string()]);
+        let decision = tf.process_line("ERROR", vec!["ERROR".to_string()]).unwrap();
         match decision {
             OutputDecision::Flush(lines) => {
                 // Should start from the LAST match of the before pattern
@@ -543,23 +552,23 @@ mod tests {
         let mut tf =
             TriggerFilter::new(&patterns(&["ERROR"]), "0", "^---", false).unwrap();
 
-        tf.process_line("ERROR happened", vec!["ERROR happened".to_string()]);
+        tf.process_line("ERROR happened", vec!["ERROR happened".to_string()]).unwrap();
 
         assert_eq!(
-            tf.process_line("detail 1", vec!["detail 1".to_string()]),
+            tf.process_line("detail 1", vec!["detail 1".to_string()]).unwrap(),
             OutputDecision::Pass(vec!["detail 1".to_string()])
         );
         assert_eq!(
-            tf.process_line("detail 2", vec!["detail 2".to_string()]),
+            tf.process_line("detail 2", vec!["detail 2".to_string()]).unwrap(),
             OutputDecision::Pass(vec!["detail 2".to_string()])
         );
         // Boundary line is included, then suppressing resumes
         assert_eq!(
-            tf.process_line("--- END", vec!["--- END".to_string()]),
+            tf.process_line("--- END", vec!["--- END".to_string()]).unwrap(),
             OutputDecision::Pass(vec!["--- END".to_string()])
         );
         assert_eq!(
-            tf.process_line("suppressed", vec!["suppressed".to_string()]),
+            tf.process_line("suppressed", vec!["suppressed".to_string()]).unwrap(),
             OutputDecision::Suppress
         );
     }
@@ -569,11 +578,11 @@ mod tests {
         let mut tf =
             TriggerFilter::new(&patterns(&["ERROR"]), "^===", "^---", false).unwrap();
 
-        tf.process_line("noise", vec!["noise".to_string()]);
-        tf.process_line("=== BEGIN", vec!["=== BEGIN".to_string()]);
-        tf.process_line("setup", vec!["setup".to_string()]);
+        tf.process_line("noise", vec!["noise".to_string()]).unwrap();
+        tf.process_line("=== BEGIN", vec!["=== BEGIN".to_string()]).unwrap();
+        tf.process_line("setup", vec!["setup".to_string()]).unwrap();
 
-        let decision = tf.process_line("ERROR fail", vec!["ERROR fail".to_string()]);
+        let decision = tf.process_line("ERROR fail", vec!["ERROR fail".to_string()]).unwrap();
         match decision {
             OutputDecision::Flush(lines) => {
                 assert_eq!(
@@ -585,15 +594,15 @@ mod tests {
         }
 
         assert_eq!(
-            tf.process_line("trace info", vec!["trace info".to_string()]),
+            tf.process_line("trace info", vec!["trace info".to_string()]).unwrap(),
             OutputDecision::Pass(vec!["trace info".to_string()])
         );
         assert_eq!(
-            tf.process_line("--- END", vec!["--- END".to_string()]),
+            tf.process_line("--- END", vec!["--- END".to_string()]).unwrap(),
             OutputDecision::Pass(vec!["--- END".to_string()])
         );
         assert_eq!(
-            tf.process_line("gone", vec!["gone".to_string()]),
+            tf.process_line("gone", vec!["gone".to_string()]).unwrap(),
             OutputDecision::Suppress
         );
     }
@@ -604,10 +613,10 @@ mod tests {
             TriggerFilter::new(&patterns(&["ERROR"]), "^===", "0", false).unwrap();
 
         // No line matches ^=== before the trigger
-        tf.process_line("no boundary here", vec!["no boundary here".to_string()]);
-        tf.process_line("still no boundary", vec!["still no boundary".to_string()]);
+        tf.process_line("no boundary here", vec!["no boundary here".to_string()]).unwrap();
+        tf.process_line("still no boundary", vec!["still no boundary".to_string()]).unwrap();
 
-        let decision = tf.process_line("ERROR", vec!["ERROR".to_string()]);
+        let decision = tf.process_line("ERROR", vec!["ERROR".to_string()]).unwrap();
         match decision {
             OutputDecision::Flush(lines) => {
                 // All buffered lines included since no boundary was found
@@ -671,11 +680,11 @@ mod tests {
     fn separator_has_color_when_enabled() {
         let mut tf = TriggerFilter::new(&patterns(&["TRIGGER"]), "1", "0", true).unwrap();
 
-        tf.process_line("ctx1", vec!["ctx1".to_string()]);
-        tf.process_line("TRIGGER one", vec!["TRIGGER one".to_string()]);
+        tf.process_line("ctx1", vec!["ctx1".to_string()]).unwrap();
+        tf.process_line("TRIGGER one", vec!["TRIGGER one".to_string()]).unwrap();
 
-        tf.process_line("ctx2", vec!["ctx2".to_string()]);
-        let second = tf.process_line("TRIGGER two", vec!["TRIGGER two".to_string()]);
+        tf.process_line("ctx2", vec!["ctx2".to_string()]).unwrap();
+        let second = tf.process_line("TRIGGER two", vec!["TRIGGER two".to_string()]).unwrap();
         match second {
             OutputDecision::Flush(lines) => {
                 // Cyan text + dark background, full-width padded

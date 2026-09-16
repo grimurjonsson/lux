@@ -1,6 +1,6 @@
 use anyhow::{bail, Result};
 use owo_colors::Style;
-use regex::Regex;
+use fancy_regex::Regex;
 
 use crate::color;
 use crate::config::Config;
@@ -377,7 +377,7 @@ mod tests {
     #[test]
     fn test_parse_simple_rule() {
         let rule = parse_rule("ERROR:red", 0).unwrap();
-        assert!(rule.pattern.is_match("ERROR"));
+        assert!(rule.pattern.is_match("ERROR").unwrap());
         assert_eq!(rule.scope, MatchScope::Line);
         assert_eq!(rule.priority, 0);
     }
@@ -385,7 +385,7 @@ mod tests {
     #[test]
     fn test_parse_rule_with_explicit_scope() {
         let rule = parse_rule("ERROR:bold+red:line", 0).unwrap();
-        assert!(rule.pattern.is_match("ERROR"));
+        assert!(rule.pattern.is_match("ERROR").unwrap());
         assert_eq!(rule.scope, MatchScope::Line);
     }
 
@@ -393,7 +393,7 @@ mod tests {
     fn test_parse_rule_colon_in_pattern() {
         // Pattern \d{2}:\d{2}:\d{2} contains colons
         let rule = parse_rule(r"\d{2}:\d{2}:\d{2}:blue", 0).unwrap();
-        assert!(rule.pattern.is_match("12:34:56"));
+        assert!(rule.pattern.is_match("12:34:56").unwrap());
         assert_eq!(rule.scope, MatchScope::Line);
     }
 
@@ -458,36 +458,36 @@ mod tests {
     fn test_default_rules_case_insensitive() {
         let rules = default_rules(0);
         // ERROR rule (index 1) should match case-insensitively
-        assert!(rules[1].pattern.is_match("error"));
-        assert!(rules[1].pattern.is_match("ERROR"));
-        assert!(rules[1].pattern.is_match("Error"));
+        assert!(rules[1].pattern.is_match("error").unwrap());
+        assert!(rules[1].pattern.is_match("ERROR").unwrap());
+        assert!(rules[1].pattern.is_match("Error").unwrap());
     }
 
     #[test]
     fn test_default_rules_fatal_critical() {
         let rules = default_rules(0);
-        assert!(rules[0].pattern.is_match("FATAL"));
-        assert!(rules[0].pattern.is_match("CRITICAL"));
-        assert!(rules[0].pattern.is_match("fatal"));
+        assert!(rules[0].pattern.is_match("FATAL").unwrap());
+        assert!(rules[0].pattern.is_match("CRITICAL").unwrap());
+        assert!(rules[0].pattern.is_match("fatal").unwrap());
     }
 
     #[test]
     fn test_default_rules_warn() {
         let rules = default_rules(0);
-        assert!(rules[2].pattern.is_match("WARN"));
-        assert!(rules[2].pattern.is_match("WARNING"));
+        assert!(rules[2].pattern.is_match("WARN").unwrap());
+        assert!(rules[2].pattern.is_match("WARNING").unwrap());
     }
 
     #[test]
     fn test_default_rules_debug() {
         let rules = default_rules(0);
-        assert!(rules[3].pattern.is_match("DEBUG"));
+        assert!(rules[3].pattern.is_match("DEBUG").unwrap());
     }
 
     #[test]
     fn test_default_rules_trace() {
         let rules = default_rules(0);
-        assert!(rules[4].pattern.is_match("TRACE"));
+        assert!(rules[4].pattern.is_match("TRACE").unwrap());
     }
 
     #[test]
@@ -510,7 +510,7 @@ mod tests {
         let rules = build_rules(&cli_rules).unwrap();
         assert_eq!(rules.len(), 1); // Just the user rule
         assert_eq!(rules[0].priority, 0);
-        assert!(rules[0].pattern.is_match("mypattern"));
+        assert!(rules[0].pattern.is_match("mypattern").unwrap());
     }
 
     #[test]
@@ -531,7 +531,7 @@ mod tests {
     #[test]
     fn test_rule_from_config_valid() {
         let rule = rule_from_config("ERROR", "red", "match", 0).unwrap();
-        assert!(rule.pattern.is_match("ERROR"));
+        assert!(rule.pattern.is_match("ERROR").unwrap());
         assert_eq!(rule.scope, MatchScope::Match);
         assert_eq!(rule.priority, 0);
     }
@@ -641,8 +641,8 @@ mod tests {
         let rules = build_rules_with_config(&[], Some(&config), Some("django"), None).unwrap();
         // 1 profile + 1 global = 2
         assert_eq!(rules.len(), 2);
-        assert!(rules[0].pattern.is_match("django"));
-        assert!(rules[1].pattern.is_match("GLOBAL"));
+        assert!(rules[0].pattern.is_match("django").unwrap());
+        assert!(rules[1].pattern.is_match("GLOBAL").unwrap());
     }
 
     #[test]
@@ -685,7 +685,7 @@ mod tests {
     #[test]
     fn test_parse_rule_insert_before() {
         let rule = parse_rule("ERROR::insert-before:--- alert ---", 0).unwrap();
-        assert!(rule.pattern.is_match("ERROR"));
+        assert!(rule.pattern.is_match("ERROR").unwrap());
         match &rule.scope {
             MatchScope::InsertBefore(tmpl) => {
                 assert_eq!(tmpl.template, "--- alert ---");
@@ -697,7 +697,7 @@ mod tests {
     #[test]
     fn test_parse_rule_insert_after() {
         let rule = parse_rule("FATAL::insert-after:[red]^^^[/]", 0).unwrap();
-        assert!(rule.pattern.is_match("FATAL"));
+        assert!(rule.pattern.is_match("FATAL").unwrap());
         match &rule.scope {
             MatchScope::InsertAfter(tmpl) => {
                 assert_eq!(tmpl.template, "[red]^^^[/]");
@@ -710,7 +710,7 @@ mod tests {
     #[test]
     fn test_parse_rule_prepend() {
         let rule = parse_rule("WARN:yellow:prepend:⚠ ", 0).unwrap();
-        assert!(rule.pattern.is_match("WARN"));
+        assert!(rule.pattern.is_match("WARN").unwrap());
         assert_ne!(rule.style, Style::new(), "style should not be default");
         match &rule.scope {
             MatchScope::Prepend(tmpl) => {
@@ -723,7 +723,7 @@ mod tests {
     #[test]
     fn test_parse_rule_append() {
         let rule = parse_rule("DEBUG::append: [dim](debug)[/]", 0).unwrap();
-        assert!(rule.pattern.is_match("DEBUG"));
+        assert!(rule.pattern.is_match("DEBUG").unwrap());
         match &rule.scope {
             MatchScope::Append(tmpl) => {
                 assert_eq!(tmpl.template, " [dim](debug)[/]");
@@ -735,7 +735,7 @@ mod tests {
     #[test]
     fn test_parse_rule_insert_with_colons_in_template() {
         let rule = parse_rule("ERROR::insert-before:--- 12:34:56 ---", 0).unwrap();
-        assert!(rule.pattern.is_match("ERROR"));
+        assert!(rule.pattern.is_match("ERROR").unwrap());
         match &rule.scope {
             MatchScope::InsertBefore(tmpl) => {
                 assert_eq!(tmpl.template, "--- 12:34:56 ---");
@@ -771,7 +771,7 @@ mod tests {
         let rule = rule_from_config_with_text(
             "ERROR", "red", "insert-before", "--- alert ---", 0,
         ).unwrap();
-        assert!(rule.pattern.is_match("ERROR"));
+        assert!(rule.pattern.is_match("ERROR").unwrap());
         match &rule.scope {
             MatchScope::InsertBefore(tmpl) => {
                 assert_eq!(tmpl.template, "--- alert ---");
