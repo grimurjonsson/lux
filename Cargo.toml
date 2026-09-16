@@ -6,7 +6,7 @@ license = "MIT"
 
 [dependencies]
 anyhow = "1.0.102"
-clap = { version = "4.5.60", features = ["derive"] }
+clap = { version = "4.5.60", features = ["derive", "wrap_help"] }
 clap_complete = "4.6"
 owo-colors = { version = "4.3.0", features = ["supports-colors"] }
 regex = "1.12.3"

@@ -3,128 +3,183 @@ use clap_complete::Shell;
 
 /// Lit Up teXt — instantly readable colored output
 #[derive(Parser)]
-#[command(name = "lux", version, about = "Lit Up teXt — instantly readable colored output")]
+#[command(
+    name = "lux",
+    version,
+    about = "Lit Up teXt — instantly readable colored output",
+    max_term_width = 100,
+    styles = clap::builder::Styles::styled()
+        .header(clap::builder::styling::AnsiColor::Cyan.on_default().bold())
+        .usage(clap::builder::styling::AnsiColor::Cyan.on_default().bold())
+        .literal(clap::builder::styling::Style::new().bold())
+        .placeholder(clap::builder::styling::Style::new().dimmed()),
+    after_help = "\
+\x1b[1;36mRule reference:\x1b[0m
+  PATTERN:STYLE[:SCOPE]                 e.g. 'ERROR:bold+red:match'
+  line (default)  whole line            match  matched text only
+  capN            capture group N       nextN  next N lines after a match
+  insert-before:TEXT / insert-after:TEXT insert a line before / after
+  prepend:TEXT / append:TEXT            add text to the matching line
+
+  Patterns support lookaround: 'error(?!-style):red:match'.
+  -r replaces profile/global rules with the exact same pattern.
+  Repeat -r, -i, -e, or -t for multiple patterns.
+
+\x1b[1;36mExamples:\x1b[0m
+  tail -f app.log | lux -r 'ERROR:red'   Color a stream
+  lux app.log -t ERROR -b 5 -a 10        Show errors with context
+  lux README.md --less                  Browse with the pager
+
+Use 'lux <command> --help' for command details."
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,
 
-    /// Add a coloring rule: PATTERN:STYLE[:SCOPE]
-    ///
-    /// SCOPE (default: line):
-    ///   line                  color the entire line
-    ///   match                 color only the matched text
-    ///   capN                  color capture group N (e.g. cap1)
-    ///   nextN                 color the next N lines after the match
-    ///   insert-before:TEXT    insert a line before the matching line
-    ///   insert-after:TEXT     insert a line after the matching line
-    ///   prepend:TEXT          prepend text to the matching line
-    ///   append:TEXT           append text to the matching line
-    #[arg(short = 'r', long = "rule", action = clap::ArgAction::Append, verbatim_doc_comment)]
+    /// Color text with PATTERN:STYLE[:SCOPE] (reference below)
+    #[arg(short = 'r', long = "rule", value_name = "RULE", help_heading = "Rules & color", action = clap::ArgAction::Append)]
     pub rules: Vec<String>,
 
-    /// Control color output
-    #[arg(long, default_value = "auto")]
+    /// Color output: auto, always, never
+    #[arg(
+        long,
+        default_value = "auto",
+        value_name = "WHEN",
+        hide_possible_values = true,
+        help_heading = "Rules & color"
+    )]
     pub color: ColorChoice,
 
-    /// Select a named profile from the config file
-    #[arg(short = 'p', long)]
-    pub profile: Option<String>,
-
-    /// Disable automatic profile and syntax highlighting (only explicit -r rules apply)
-    #[arg(long, alias = "plain", conflicts_with = "profile")]
-    pub no_profile: bool,
-
-    /// Continue without error if a profile is not found (useful for shared configs)
-    #[arg(long)]
-    pub ignore_missing_profiles: bool,
-
-    /// Path to a custom config file (overrides XDG discovery)
-    #[arg(long)]
-    pub config: Option<String>,
-
-    /// List available profiles from the config file
-    #[arg(long)]
-    pub list_profiles: bool,
-
-    /// List available color names and styles
-    #[arg(long)]
-    pub list_colors: bool,
-
-    /// List available syntax highlighting themes
-    #[arg(long)]
-    pub list_themes: bool,
-
-    /// List available syntax definitions and their file extensions
-    #[arg(long)]
-    pub list_syntaxes: bool,
-
-    /// Syntax highlighting theme (overrides config.toml)
-    #[arg(long)]
+    /// Syntax theme (overrides config.toml)
+    #[arg(long, help_heading = "Rules & color")]
     pub theme: Option<String>,
 
-    /// Follow file by descriptor (reopen not attempted after rename/delete)
-    #[arg(short = 'f')]
+    /// Select a named profile
+    #[arg(short = 'p', long, help_heading = "Profiles & config")]
+    pub profile: Option<String>,
+
+    /// Skip auto profiles and syntax; keep -r rules
+    #[arg(
+        long,
+        alias = "plain",
+        conflicts_with = "profile",
+        help_heading = "Profiles & config"
+    )]
+    pub no_profile: bool,
+
+    /// Allow missing profiles (for shared configs)
+    #[arg(long, help_heading = "Profiles & config")]
+    pub ignore_missing_profiles: bool,
+
+    /// Config file (instead of XDG discovery)
+    #[arg(long, value_name = "PATH", help_heading = "Profiles & config")]
+    pub config: Option<String>,
+
+    /// Follow descriptor; do not reopen after rename/delete
+    #[arg(short = 'f', help_heading = "File viewing")]
     pub follow_descriptor: bool,
 
-    /// Follow file by name (reopen on rename/truncate/recreate)
-    #[arg(short = 'F', conflicts_with = "follow_descriptor")]
+    /// Follow name; reopen on rename/truncate/recreate
+    #[arg(
+        short = 'F',
+        conflicts_with = "follow_descriptor",
+        help_heading = "File viewing"
+    )]
     pub follow_name: bool,
 
-    /// Expand own-line @file.md references inline when viewing markdown.
+    /// Expand own-line @file.md references in Markdown
     #[arg(
         long = "expand-refs",
+        help_heading = "File viewing",
         visible_alias = "expand-referenced-files",
         conflicts_with_all = ["follow_descriptor", "follow_name"]
     )]
     pub expand_refs: bool,
 
-    /// Open file in interactive pager mode (like less)
-    #[arg(long, conflicts_with_all = ["follow_descriptor", "follow_name", "cat"])]
+    /// Open in an interactive pager (like less)
+    #[arg(long, conflicts_with_all = ["follow_descriptor", "follow_name", "cat"], help_heading = "File viewing")]
     pub less: bool,
 
-    /// Print file and exit (non-interactive, this is the default)
-    #[arg(long, conflicts_with_all = ["follow_descriptor", "follow_name", "less"])]
+    /// Print and exit (default)
+    #[arg(long, conflicts_with_all = ["follow_descriptor", "follow_name", "less"], help_heading = "File viewing")]
     pub cat: bool,
 
-    /// Number of lines to show (e.g. "10", "+5" for from-line)
-    #[arg(short = 'n')]
+    /// Last N lines, or +N to start at line N
+    #[arg(short = 'n', value_name = "N", help_heading = "File viewing")]
     pub lines: Option<String>,
 
-    /// Trigger pattern(s) — suppress output until a match, then show context window
-    #[arg(short = 't', long = "trigger", action = clap::ArgAction::Append)]
+    /// Show matching lines and their context; hide the rest
+    #[arg(short = 't', long = "trigger", value_name = "REGEX", help_heading = "Filtering & context", action = clap::ArgAction::Append)]
     pub trigger: Vec<String>,
 
-    /// Context before trigger: line count (e.g. "20") or regex boundary (e.g. "^===")
-    #[arg(short = 'b', long, default_value = "20")]
+    /// Before: line count or regex boundary
+    #[arg(
+        short = 'b',
+        long,
+        default_value = "20",
+        value_name = "N|REGEX",
+        help_heading = "Filtering & context"
+    )]
     pub before: String,
 
-    /// Context after trigger: line count (e.g. "20") or regex boundary (e.g. "^---")
-    #[arg(short = 'a', long, default_value = "20")]
+    /// After: line count or regex boundary
+    #[arg(
+        short = 'a',
+        long,
+        default_value = "20",
+        value_name = "N|REGEX",
+        help_heading = "Filtering & context"
+    )]
     pub after: String,
 
-    /// Only show lines matching PATTERN (can be repeated)
-    #[arg(short = 'i', long = "include", action = clap::ArgAction::Append)]
+    /// Only show matching lines
+    #[arg(short = 'i', long = "include", value_name = "REGEX", help_heading = "Filtering & context", action = clap::ArgAction::Append)]
     pub include: Vec<String>,
 
-    /// Hide lines matching PATTERN (can be repeated)
-    #[arg(short = 'e', long = "exclude", action = clap::ArgAction::Append)]
+    /// Hide matching lines
+    #[arg(short = 'e', long = "exclude", value_name = "REGEX", help_heading = "Filtering & context", action = clap::ArgAction::Append)]
     pub exclude: Vec<String>,
 
-    /// Strip ANSI escape codes from input before pattern matching
-    #[arg(long = "strip-ansi", default_value = "auto")]
+    /// ANSI: auto/always strip; never keeps
+    #[arg(
+        long = "strip-ansi",
+        default_value = "auto",
+        value_name = "MODE",
+        hide_possible_values = true,
+        help_heading = "Filtering & context"
+    )]
     pub strip_ansi: StripAnsi,
 
-    /// Annotate lines that took longer than this threshold to arrive.
-    /// Accepts durations like: 500ms, 5s, 1m, 1m30s.
-    /// Only effective in pipe and follow modes.
-    #[arg(long)]
+    /// Mark delays: 500ms, 5s, 1m30s (pipe/follow only)
+    #[arg(long, value_name = "DURATION", help_heading = "Timing")]
     pub slow: Option<String>,
 
-    /// Style for slow-line annotations (default: dim+yellow).
-    #[arg(long, default_value = "dim+yellow")]
+    /// Delayed-line style
+    #[arg(
+        long,
+        default_value = "dim+yellow",
+        value_name = "STYLE",
+        help_heading = "Timing"
+    )]
     pub slow_style: String,
 
-    /// File to read (positional argument)
+    /// Available profiles
+    #[arg(long, help_heading = "Discovery")]
+    pub list_profiles: bool,
+
+    /// Color names and styles
+    #[arg(long, help_heading = "Discovery")]
+    pub list_colors: bool,
+
+    /// Syntax highlighting themes
+    #[arg(long, help_heading = "Discovery")]
+    pub list_themes: bool,
+
+    /// Syntax names and file extensions
+    #[arg(long, help_heading = "Discovery")]
+    pub list_syntaxes: bool,
+
+    /// Read a file, or pipe text to stdin
     pub file: Option<String>,
 }
 
@@ -369,7 +424,10 @@ mod tests {
     fn test_lines_none_when_omitted() {
         // Critical: lines must be None when not specified, not Some("10")
         let cli = Cli::try_parse_from(["lux", "app.log"]).unwrap();
-        assert!(cli.lines.is_none(), "lines must be None when -n is not passed");
+        assert!(
+            cli.lines.is_none(),
+            "lines must be None when -n is not passed"
+        );
     }
 
     #[test]
@@ -386,15 +444,22 @@ mod tests {
 
     #[test]
     fn test_trigger_multiple() {
-        let cli =
-            Cli::try_parse_from(["lux", "--trigger", "ERROR", "--trigger", "WARN"]).unwrap();
+        let cli = Cli::try_parse_from(["lux", "--trigger", "ERROR", "--trigger", "WARN"]).unwrap();
         assert_eq!(cli.trigger, vec!["ERROR", "WARN"]);
     }
 
     #[test]
     fn test_trigger_with_before_after_count() {
         let cli = Cli::try_parse_from([
-            "lux", "--trigger", "ERROR", "--trigger", "WARN", "--before", "5", "--after", "10",
+            "lux",
+            "--trigger",
+            "ERROR",
+            "--trigger",
+            "WARN",
+            "--before",
+            "5",
+            "--after",
+            "10",
         ])
         .unwrap();
         assert_eq!(cli.trigger, vec!["ERROR", "WARN"]);
@@ -405,7 +470,13 @@ mod tests {
     #[test]
     fn test_trigger_with_before_after_pattern() {
         let cli = Cli::try_parse_from([
-            "lux", "--trigger", "ERROR", "--before", "^===", "--after", "^---",
+            "lux",
+            "--trigger",
+            "ERROR",
+            "--before",
+            "^===",
+            "--after",
+            "^---",
         ])
         .unwrap();
         assert_eq!(cli.before, "^===");
@@ -425,15 +496,20 @@ mod tests {
         let cli = Cli::try_parse_from(["lux", "profile", "new"]).unwrap();
         assert!(matches!(
             cli.command,
-            Some(Command::Profile { action: ProfileAction::New { .. } })
+            Some(Command::Profile {
+                action: ProfileAction::New { .. }
+            })
         ));
     }
 
     #[test]
     fn test_profile_new_with_config() {
-        let cli = Cli::try_parse_from(["lux", "profile", "new", "--config", "/tmp/my.toml"]).unwrap();
+        let cli =
+            Cli::try_parse_from(["lux", "profile", "new", "--config", "/tmp/my.toml"]).unwrap();
         match cli.command {
-            Some(Command::Profile { action: ProfileAction::New { config } }) => {
+            Some(Command::Profile {
+                action: ProfileAction::New { config },
+            }) => {
                 assert_eq!(config.as_deref(), Some("/tmp/my.toml"));
             }
             _ => panic!("expected Profile New"),
@@ -444,7 +520,9 @@ mod tests {
     fn test_profile_edit_subcommand() {
         let cli = Cli::try_parse_from(["lux", "profile", "edit", "django"]).unwrap();
         match cli.command {
-            Some(Command::Profile { action: ProfileAction::Edit { name, .. } }) => {
+            Some(Command::Profile {
+                action: ProfileAction::Edit { name, .. },
+            }) => {
                 assert_eq!(name.as_deref(), Some("django"));
             }
             _ => panic!("expected Profile Edit"),
@@ -455,7 +533,9 @@ mod tests {
     fn test_profile_delete_subcommand() {
         let cli = Cli::try_parse_from(["lux", "profile", "delete", "django"]).unwrap();
         match cli.command {
-            Some(Command::Profile { action: ProfileAction::Delete { name, .. } }) => {
+            Some(Command::Profile {
+                action: ProfileAction::Delete { name, .. },
+            }) => {
                 assert_eq!(name.as_deref(), Some("django"));
             }
             _ => panic!("expected Profile Delete"),
@@ -466,7 +546,9 @@ mod tests {
     fn test_profile_show_subcommand() {
         let cli = Cli::try_parse_from(["lux", "profile", "show", "logs"]).unwrap();
         match cli.command {
-            Some(Command::Profile { action: ProfileAction::Show { name, .. } }) => {
+            Some(Command::Profile {
+                action: ProfileAction::Show { name, .. },
+            }) => {
                 assert_eq!(name, "logs");
             }
             _ => panic!("expected Profile Show"),
@@ -475,9 +557,13 @@ mod tests {
 
     #[test]
     fn test_profile_show_with_config() {
-        let cli = Cli::try_parse_from(["lux", "profile", "show", "logs", "--config", "/tmp/my.toml"]).unwrap();
+        let cli =
+            Cli::try_parse_from(["lux", "profile", "show", "logs", "--config", "/tmp/my.toml"])
+                .unwrap();
         match cli.command {
-            Some(Command::Profile { action: ProfileAction::Show { name, config } }) => {
+            Some(Command::Profile {
+                action: ProfileAction::Show { name, config },
+            }) => {
                 assert_eq!(name, "logs");
                 assert_eq!(config.as_deref(), Some("/tmp/my.toml"));
             }
@@ -490,7 +576,9 @@ mod tests {
         let cli = Cli::try_parse_from(["lux", "profile", "list"]).unwrap();
         assert!(matches!(
             cli.command,
-            Some(Command::Profile { action: ProfileAction::List { .. } })
+            Some(Command::Profile {
+                action: ProfileAction::List { .. }
+            })
         ));
     }
 
@@ -546,7 +634,13 @@ mod tests {
 
     #[test]
     fn test_ignore_missing_profiles_flag() {
-        let cli = Cli::try_parse_from(["lux", "--profile", "nonexistent", "--ignore-missing-profiles"]).unwrap();
+        let cli = Cli::try_parse_from([
+            "lux",
+            "--profile",
+            "nonexistent",
+            "--ignore-missing-profiles",
+        ])
+        .unwrap();
         assert!(cli.ignore_missing_profiles);
         assert_eq!(cli.profile.as_deref(), Some("nonexistent"));
     }
@@ -591,7 +685,9 @@ mod tests {
     fn test_config_default_file_mode_subcommand() {
         let cli = Cli::try_parse_from(["lux", "config", "default-file-mode", "less"]).unwrap();
         match cli.command {
-            Some(Command::Config { action: ConfigAction::DefaultFileMode { value } }) => {
+            Some(Command::Config {
+                action: ConfigAction::DefaultFileMode { value },
+            }) => {
                 assert_eq!(value, "less");
             }
             _ => panic!("expected Config DefaultFileMode"),

@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Make `-r` replace profile/global rules with the exact same pattern, including scopes and insertion templates, while preserving unrelated rules.
 
+### Changed
+- Compact `-h` and `--help` into the same grouped reference, with terminal-aware wrapping, colored headings, a rule-scope reference, and examples.
+
 ## [0.1.20] - 2026-09-03
 Fenced code blocks in markdown are now syntax-highlighted using the language named in the fence.
 
